@@ -1,0 +1,24 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[tool.maturin]
+# "extension-module" tells pyo3 we want to build an extension module (skips linking against libpython.so)
+features = ["pyo3/extension-module"]
+
+[project]
+name = "pysui-fastcrypto"
+description = "Python wrapper for MystenLab/fastcrypto Rust crate"
+readme = "README.rst"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python"
+]
+
+[project.urls]
+homepage = "example.com"
+documentation = "readthedocs.org"
+repository = "github.com"
+changelog = "github.com/me/spam/blob/master/CHANGELOG.md"
