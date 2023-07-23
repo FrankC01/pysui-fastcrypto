@@ -18,7 +18,6 @@ classifiers = [
 ]
 
 [project.urls]
-homepage = "example.com"
-documentation = "readthedocs.org"
-repository = "github.com"
-changelog = "github.com/me/spam/blob/master/CHANGELOG.md"
+homepage = "https://github.com/FrankC01/pysui-fastcrypto"
+repository = "https://github.com/FrankC01/pysui-fastcrypto"
+changelog = "https://github.com/FrankC01/pysui-fastcrypto/blob/master/CHANGELOG.md"
