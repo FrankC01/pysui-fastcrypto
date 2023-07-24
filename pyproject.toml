@@ -20,4 +20,4 @@ classifiers = [
 [project.urls]
 homepage = "https://github.com/FrankC01/pysui-fastcrypto"
 repository = "https://github.com/FrankC01/pysui-fastcrypto"
-changelog = "https://github.com/FrankC01/pysui-fastcrypto/blob/master/CHANGELOG.md"
+changelog = "https://github.com/FrankC01/pysui-fastcrypto/blob/main/CHANGELOG.md"
