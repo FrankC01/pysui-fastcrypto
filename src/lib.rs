@@ -11,7 +11,11 @@ use fastcrypto::{
     traits::{KeyPair, Signer, ToFromBytes},
 };
 use slip10_ed25519::derive_ed25519_private_key;
-use std::{collections::VecDeque, str::FromStr};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    str::FromStr,
+    sync::Mutex,
+};
 
 use pyo3::prelude::*;
 
@@ -165,35 +169,42 @@ impl SuiKeyPair {
             SuiKeyPair::Secp256r1(_) => SignatureScheme::Secp256r1,
         }
     }
-
-    /// Retrieve the seed bytes
-    fn as_bytes(&self) -> Vec<u8> {
+    fn duplicate(&self) -> SuiKeyPair {
         match self {
-            SuiKeyPair::Ed25519(kp) => kp.as_bytes().to_vec(),
-            SuiKeyPair::Secp256k1(kp) => kp.as_bytes().to_vec(),
-            SuiKeyPair::Secp256r1(kp) => kp.as_bytes().to_vec(),
+            SuiKeyPair::Ed25519(kp) => {
+                SuiKeyPair::Ed25519(Ed25519KeyPair::from_bytes(kp.as_bytes()).unwrap())
+            }
+            SuiKeyPair::Secp256k1(kp) => {
+                SuiKeyPair::Secp256k1(Secp256k1KeyPair::from_bytes(kp.as_bytes()).unwrap())
+            }
+            SuiKeyPair::Secp256r1(kp) => {
+                SuiKeyPair::Secp256r1(Secp256r1KeyPair::from_bytes(kp.as_bytes()).unwrap())
+            }
         }
     }
 }
 
 /// Given a keystring, produce a keypair
-fn keypair_from_keystring(keystring: String) -> SuiKeyPair {
+fn keypair_from_keystring(keystring: String) -> Result<SuiKeyPair, LibError> {
     let b64b = &mut VecDeque::from(Base64::decode(&keystring).unwrap());
     let kscheme = SignatureScheme::from_flag_byte(&b64b.pop_front().unwrap()).unwrap();
     let rembytes = b64b.make_contiguous();
     match kscheme {
-        SignatureScheme::ED25519 => {
-            SuiKeyPair::Ed25519(Ed25519KeyPair::from_bytes(rembytes).unwrap())
-        }
-        SignatureScheme::Secp256k1 => {
-            SuiKeyPair::Secp256k1(Secp256k1KeyPair::from_bytes(rembytes).unwrap())
-        }
-        SignatureScheme::Secp256r1 => {
-            SuiKeyPair::Secp256r1(Secp256r1KeyPair::from_bytes(rembytes).unwrap())
-        }
-        SignatureScheme::BLS12381 => todo!(),
-        SignatureScheme::MultiSig => todo!(),
-        SignatureScheme::ZkLoginAuthenticator => todo!(),
+        SignatureScheme::ED25519 => Ok(SuiKeyPair::Ed25519(
+            Ed25519KeyPair::from_bytes(rembytes).unwrap(),
+        )),
+        SignatureScheme::Secp256k1 => Ok(SuiKeyPair::Secp256k1(
+            Secp256k1KeyPair::from_bytes(rembytes).unwrap(),
+        )),
+        SignatureScheme::Secp256r1 => Ok(SuiKeyPair::Secp256r1(
+            Secp256r1KeyPair::from_bytes(rembytes).unwrap(),
+        )),
+        SignatureScheme::BLS12381
+        | SignatureScheme::MultiSig
+        | SignatureScheme::ZkLoginAuthenticator => Err(anyhow!(format!(
+            "key derivation not supported {:?}",
+            kscheme
+        ))),
     }
 }
 
@@ -374,27 +385,65 @@ fn parse_word_length(s: Option<String>) -> Result<MnemonicType, anyhow::Error> {
     }
 }
 
-#[pyfunction]
-/// Fetch schema and keypair seed
-fn key_from_string(in_str: String) -> (u8, Vec<u8>, Vec<u8>) {
-    let kp = keypair_from_keystring(in_str);
-    (kp.scheme().flag(), kp.pubkey().as_bytes(), kp.as_bytes())
+static GLOBAL_DATA: Mutex<BTreeMap<String, SuiKeyPair>> =
+    Mutex::new(BTreeMap::<String, SuiKeyPair>::new());
+
+/// Store a keypair associated to the hashed public key.
+///
+/// Throws error if key/token already exists
+fn store_key(key_pair: SuiKeyPair) -> Result<(Vec<u8>, String), LibError> {
+    // Hash the public key bytes
+    let key_bytes = key_pair.pubkey().as_bytes();
+    let mut hasher = DefaultHash::default();
+    hasher.update(key_bytes.clone());
+    // Stringify the token and use as key to keypair
+    let mut map = GLOBAL_DATA.lock().unwrap();
+    let token = Base64::encode(hasher.finalize().digest);
+    if map.contains_key(&token) {
+        return Err(anyhow!(format!("Failed to generate keypair: {:?}", token)));
+    }
+    map.insert(token.clone(), key_pair);
+    Ok((key_bytes, token))
 }
 
+/// Get a duplicate of the keypair from token
+fn keypair_from_token(token: &String) -> Result<SuiKeyPair, LibError> {
+    let map = GLOBAL_DATA.lock().unwrap();
+    if let Some(kp) = map.get(token) {
+        return Ok(kp.duplicate());
+    }
+    Err(anyhow!(format!("Token {} not found", token)))
+}
+
+/// Returns a keystrings scheme, public key bytes and a token from a Sui keystring.
+/// Assumes that the inbound keystring is valid (e.g. `flag | private_key bytes`)
 #[pyfunction]
-/// Create a new keypair and address
+fn keys_from_keystring(in_str: String) -> (u8, Vec<u8>, String) {
+    assert!(in_str.len() != 0, "Requires valid keystring");
+    let kp = keypair_from_keystring(in_str).unwrap();
+    let scheme = kp.scheme().flag();
+    let (pub_key, token) = store_key(kp).unwrap();
+    (scheme, pub_key, token)
+}
+
+/// Returns a new keystrings scheme, public key bytes and a token./// Assumes that the inbound keystring is valid (e.g. `flag | private_key bytes`)
+#[pyfunction]
 fn generate_new_keypair(
     in_scheme: u8,
     derv_path: Option<String>,
     word_count: Option<String>,
-) -> (u8, String, Vec<u8>, Vec<u8>) {
+) -> (u8, String, Vec<u8>, String) {
     let (scheme, phrase, kp) = new_keypair(in_scheme, derv_path, word_count).unwrap();
-    (scheme.flag(), phrase, kp.pubkey().as_bytes(), kp.as_bytes())
+    // Hash the public key
+    let (pub_key, token) = store_key(kp).unwrap();
+    (scheme.flag(), phrase, pub_key, token)
 }
 
+/// Signs a message with optional intent, otherwise default is used
+/// The in_data string is the tx_bytes string
 #[pyfunction]
-fn sign_digest(keystring: String, in_data: String, intent: Option<Vec<u8>>) -> Vec<u8> {
-    let kp = keypair_from_keystring(keystring);
+fn sign_digest(token: String, in_data: String, intent: Option<Vec<u8>>) -> Vec<u8> {
+    let kp = keypair_from_token(&token).unwrap();
     let intent_msg = match intent {
         Some(inv) => inv,
         None => vec![0, 0, 0],
@@ -406,15 +455,14 @@ fn sign_digest(keystring: String, in_data: String, intent: Option<Vec<u8>>) -> V
     let mut sig = Base64::decode(&kp.sign(&digest)).unwrap();
     sig.insert(0, kp.scheme().flag());
     sig.extend(kp.pubkey().as_bytes());
-    println!("{:?}", sig);
     sig
 }
-/// A Python module implemented in Rust. The name of this function must match
-/// the `lib.name` setting in the `Cargo.toml`, else Python will not be able to
-/// import the module.
+
+/// The pysui_fastcrypto module implemented in Rust.  In order
+/// to import the function name must match the Cargo.toml name
 #[pymodule]
 fn pysui_fastcrypto(_py: Python, m: &PyModule) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(key_from_string, m)?)?;
+    m.add_function(wrap_pyfunction!(keys_from_keystring, m)?)?;
     m.add_function(wrap_pyfunction!(generate_new_keypair, m)?)?;
     m.add_function(wrap_pyfunction!(sign_digest, m)?)?;
 
