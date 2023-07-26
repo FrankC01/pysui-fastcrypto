@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `keys_from_mnemonics` takes phrase and derivation path
+
 ### Fixed
 
 ### Changed
@@ -16,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `keys_from_keystring` and `generate_new_keypair` now return private key bytess instead of token
 
 ### Removed
+
+- Returning the SignatureScheme from `generate_new_keypair` and `keys_from_mnemonics`
+- Returning the mnemonic phrase from `keys_from_mnemonics
 
 ## [0.1.2] - 2023-07-25
 

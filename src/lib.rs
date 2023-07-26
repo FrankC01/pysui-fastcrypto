@@ -66,7 +66,7 @@ impl Encoding for Base64 {
 }
 
 /// Signature Schemes supported by Sui
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SignatureScheme {
     ED25519,
     Secp256k1,
@@ -198,11 +198,11 @@ fn kp_from_bytes(kscheme: SignatureScheme, seed: &[u8]) -> Result<SuiKeyPair, Li
 }
 
 /// Given a keystring, produce a keypair
-fn keypair_from_keystring(keystring: String) -> Result<SuiKeyPair, LibError> {
+fn keypair_from_keystring(keystring: String) -> Result<(SignatureScheme, SuiKeyPair), LibError> {
     let b64b = &mut VecDeque::from(Base64::decode(&keystring)?);
     let kscheme = SignatureScheme::from_flag_byte(&b64b.pop_front().unwrap())?;
     let rembytes = b64b.make_contiguous();
-    Ok(kp_from_bytes(kscheme, &rembytes)?)
+    Ok((kscheme.clone(), kp_from_bytes(kscheme, &rembytes)?))
 }
 
 pub fn validate_path(
@@ -353,7 +353,7 @@ fn new_keypair(
     scheme: u8,
     derivation_path: Option<String>,
     word_length: Option<String>,
-) -> Result<(SignatureScheme, String, SuiKeyPair)> {
+) -> Result<(String, SuiKeyPair)> {
     let scheme = SignatureScheme::from_flag_byte(&scheme).unwrap();
     let dvpath = match derivation_path {
         Some(s) => Some(DerivationPath::from_str(&s).unwrap()),
@@ -362,11 +362,27 @@ fn new_keypair(
     let mnemonic = Mnemonic::new(parse_word_length(word_length).unwrap(), Language::English);
     let seed = Seed::new(&mnemonic, "");
     match derive_key_pair_from_path(seed.as_bytes(), dvpath, &scheme) {
-        Ok(kp) => Ok((scheme, mnemonic.phrase().to_string(), kp)),
+        Ok(kp) => Ok((mnemonic.phrase().to_string(), kp)),
         Err(e) => Err(anyhow!("Failed to generate keypair: {:?}", e)),
     }
 }
 
+/// Generate a new keypair with derivation path and mnemonic phrase
+fn recover_keypair(scheme: u8, derivation_path: String, phrase: String) -> Result<SuiKeyPair> {
+    let scheme = SignatureScheme::from_flag_byte(&scheme).unwrap();
+    let dvpath = Some(DerivationPath::from_str(&derivation_path).unwrap());
+    // let mnemonic = Mnemonic::from_phrase(&phrase, Language::English);
+    match Mnemonic::from_phrase(&phrase, Language::English) {
+        Ok(mnemonic) => {
+            let seed = Seed::new(&mnemonic, "");
+            match derive_key_pair_from_path(seed.as_bytes(), dvpath, &scheme) {
+                Ok(kp) => Ok(kp),
+                Err(e) => Err(anyhow!("Failed to recover keypair: {:?}", e)),
+            }
+        }
+        Err(e) => Err(anyhow!("Recovery phrash failed: {:?}", e)),
+    }
+}
 /// Find the word length for the mnemonic phrase
 fn parse_word_length(s: Option<String>) -> Result<MnemonicType, anyhow::Error> {
     match s {
@@ -387,9 +403,8 @@ fn parse_word_length(s: Option<String>) -> Result<MnemonicType, anyhow::Error> {
 #[pyfunction]
 fn keys_from_keystring(in_str: String) -> (u8, Vec<u8>, Vec<u8>) {
     assert!(in_str.len() != 0, "Requires valid keystring");
-    let kp = keypair_from_keystring(in_str).unwrap();
-    let scheme = kp.scheme().flag();
-    (scheme, kp.pubkey().as_bytes(), kp.as_bytes())
+    let (scheme, kp) = keypair_from_keystring(in_str).unwrap();
+    (scheme.flag(), kp.pubkey().as_bytes(), kp.as_bytes())
 }
 
 /// Returns a new keystrings scheme, public and private key bytes and a token.
@@ -399,11 +414,17 @@ fn generate_new_keypair(
     in_scheme: u8,
     derv_path: Option<String>,
     word_count: Option<String>,
-) -> (u8, String, Vec<u8>, Vec<u8>) {
-    let (scheme, phrase, kp) = new_keypair(in_scheme, derv_path, word_count).unwrap();
-    (scheme.flag(), phrase, kp.pubkey().as_bytes(), kp.as_bytes())
+) -> (String, Vec<u8>, Vec<u8>) {
+    let (phrase, kp) = new_keypair(in_scheme, derv_path, word_count).unwrap();
+    (phrase, kp.pubkey().as_bytes(), kp.as_bytes())
 }
 
+/// Returns keystrings scheme, public and private key bytes from mnemonic phrase and derivation path
+#[pyfunction]
+fn keys_from_mnemonics(scheme: u8, derivation_path: String, phrase: String) -> (Vec<u8>, Vec<u8>) {
+    let kp = recover_keypair(scheme, derivation_path, phrase).unwrap();
+    (kp.pubkey().as_bytes(), kp.as_bytes())
+}
 /// Signs a message with optional intent, otherwise default is used
 /// The in_data string is the tx_bytes string
 #[pyfunction]
@@ -437,6 +458,7 @@ fn sign_digest(
 #[pymodule]
 fn pysui_fastcrypto(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(keys_from_keystring, m)?)?;
+    m.add_function(wrap_pyfunction!(keys_from_mnemonics, m)?)?;
     m.add_function(wrap_pyfunction!(generate_new_keypair, m)?)?;
     m.add_function(wrap_pyfunction!(sign_digest, m)?)?;
 
