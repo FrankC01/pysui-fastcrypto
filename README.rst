@@ -1,4 +1,4 @@
 pysui-fastcrypto
 ================
 
-pysui-fastcrypto is a wrapper around MytenLab/fastcrypto. It is used by `pysui`
+pysui-fastcrypto is a Python wrapper for `MytenLab/fastcrypto <https://github.com/MystenLabs/fastcrypto>`_.

@@ -11,11 +11,7 @@ use fastcrypto::{
     traits::{KeyPair, Signer, ToFromBytes},
 };
 use slip10_ed25519::derive_ed25519_private_key;
-use std::{
-    collections::{BTreeMap, VecDeque},
-    str::FromStr,
-    sync::Mutex,
-};
+use std::{collections::VecDeque, str::FromStr};
 
 use pyo3::prelude::*;
 
@@ -169,35 +165,28 @@ impl SuiKeyPair {
             SuiKeyPair::Secp256r1(_) => SignatureScheme::Secp256r1,
         }
     }
-    fn duplicate(&self) -> SuiKeyPair {
+
+    /// Get the private key bytes
+    fn as_bytes(&self) -> Vec<u8> {
         match self {
-            SuiKeyPair::Ed25519(kp) => {
-                SuiKeyPair::Ed25519(Ed25519KeyPair::from_bytes(kp.as_bytes()).unwrap())
-            }
-            SuiKeyPair::Secp256k1(kp) => {
-                SuiKeyPair::Secp256k1(Secp256k1KeyPair::from_bytes(kp.as_bytes()).unwrap())
-            }
-            SuiKeyPair::Secp256r1(kp) => {
-                SuiKeyPair::Secp256r1(Secp256r1KeyPair::from_bytes(kp.as_bytes()).unwrap())
-            }
+            SuiKeyPair::Ed25519(kp) => kp.as_bytes().to_vec(),
+            SuiKeyPair::Secp256k1(kp) => kp.as_bytes().to_vec(),
+            SuiKeyPair::Secp256r1(kp) => kp.as_bytes().to_vec(),
         }
     }
 }
 
-/// Given a keystring, produce a keypair
-fn keypair_from_keystring(keystring: String) -> Result<SuiKeyPair, LibError> {
-    let b64b = &mut VecDeque::from(Base64::decode(&keystring).unwrap());
-    let kscheme = SignatureScheme::from_flag_byte(&b64b.pop_front().unwrap()).unwrap();
-    let rembytes = b64b.make_contiguous();
+/// Construct a SuiKeyPair from seed
+fn kp_from_bytes(kscheme: SignatureScheme, seed: &[u8]) -> Result<SuiKeyPair, LibError> {
     match kscheme {
         SignatureScheme::ED25519 => Ok(SuiKeyPair::Ed25519(
-            Ed25519KeyPair::from_bytes(rembytes).unwrap(),
+            Ed25519KeyPair::from_bytes(seed).unwrap(),
         )),
         SignatureScheme::Secp256k1 => Ok(SuiKeyPair::Secp256k1(
-            Secp256k1KeyPair::from_bytes(rembytes).unwrap(),
+            Secp256k1KeyPair::from_bytes(seed).unwrap(),
         )),
         SignatureScheme::Secp256r1 => Ok(SuiKeyPair::Secp256r1(
-            Secp256r1KeyPair::from_bytes(rembytes).unwrap(),
+            Secp256r1KeyPair::from_bytes(seed).unwrap(),
         )),
         SignatureScheme::BLS12381
         | SignatureScheme::MultiSig
@@ -206,6 +195,14 @@ fn keypair_from_keystring(keystring: String) -> Result<SuiKeyPair, LibError> {
             kscheme
         ))),
     }
+}
+
+/// Given a keystring, produce a keypair
+fn keypair_from_keystring(keystring: String) -> Result<SuiKeyPair, LibError> {
+    let b64b = &mut VecDeque::from(Base64::decode(&keystring)?);
+    let kscheme = SignatureScheme::from_flag_byte(&b64b.pop_front().unwrap())?;
+    let rembytes = b64b.make_contiguous();
+    Ok(kp_from_bytes(kscheme, &rembytes)?)
 }
 
 pub fn validate_path(
@@ -385,65 +382,42 @@ fn parse_word_length(s: Option<String>) -> Result<MnemonicType, anyhow::Error> {
     }
 }
 
-static GLOBAL_DATA: Mutex<BTreeMap<String, SuiKeyPair>> =
-    Mutex::new(BTreeMap::<String, SuiKeyPair>::new());
-
-/// Store a keypair associated to the hashed public key.
-///
-/// Throws error if key/token already exists
-fn store_key(key_pair: SuiKeyPair) -> Result<(Vec<u8>, String), LibError> {
-    // Hash the public key bytes
-    let key_bytes = key_pair.pubkey().as_bytes();
-    let mut hasher = DefaultHash::default();
-    hasher.update(key_bytes.clone());
-    // Stringify the token and use as key to keypair
-    let mut map = GLOBAL_DATA.lock().unwrap();
-    let token = Base64::encode(hasher.finalize().digest);
-    if map.contains_key(&token) {
-        return Err(anyhow!(format!("Failed to generate keypair: {:?}", token)));
-    }
-    map.insert(token.clone(), key_pair);
-    Ok((key_bytes, token))
-}
-
-/// Get a duplicate of the keypair from token
-fn keypair_from_token(token: &String) -> Result<SuiKeyPair, LibError> {
-    let map = GLOBAL_DATA.lock().unwrap();
-    if let Some(kp) = map.get(token) {
-        return Ok(kp.duplicate());
-    }
-    Err(anyhow!(format!("Token {} not found", token)))
-}
-
 /// Returns a keystrings scheme, public key bytes and a token from a Sui keystring.
 /// Assumes that the inbound keystring is valid (e.g. `flag | private_key bytes`)
 #[pyfunction]
-fn keys_from_keystring(in_str: String) -> (u8, Vec<u8>, String) {
+fn keys_from_keystring(in_str: String) -> (u8, Vec<u8>, Vec<u8>) {
     assert!(in_str.len() != 0, "Requires valid keystring");
     let kp = keypair_from_keystring(in_str).unwrap();
     let scheme = kp.scheme().flag();
-    let (pub_key, token) = store_key(kp).unwrap();
-    (scheme, pub_key, token)
+    (scheme, kp.pubkey().as_bytes(), kp.as_bytes())
 }
 
-/// Returns a new keystrings scheme, public key bytes and a token./// Assumes that the inbound keystring is valid (e.g. `flag | private_key bytes`)
+/// Returns a new keystrings scheme, public and private key bytes and a token.
+/// Assumes that the inbound keystring is valid (e.g. `flag | private_key bytes`)
 #[pyfunction]
 fn generate_new_keypair(
     in_scheme: u8,
     derv_path: Option<String>,
     word_count: Option<String>,
-) -> (u8, String, Vec<u8>, String) {
+) -> (u8, String, Vec<u8>, Vec<u8>) {
     let (scheme, phrase, kp) = new_keypair(in_scheme, derv_path, word_count).unwrap();
-    // Hash the public key
-    let (pub_key, token) = store_key(kp).unwrap();
-    (scheme.flag(), phrase, pub_key, token)
+    (scheme.flag(), phrase, kp.pubkey().as_bytes(), kp.as_bytes())
 }
 
 /// Signs a message with optional intent, otherwise default is used
 /// The in_data string is the tx_bytes string
 #[pyfunction]
-fn sign_digest(token: String, in_data: String, intent: Option<Vec<u8>>) -> Vec<u8> {
-    let kp = keypair_from_token(&token).unwrap();
+fn sign_digest(
+    in_scheme: u8,
+    prv_bytes: Vec<u8>,
+    in_data: String,
+    intent: Option<Vec<u8>>,
+) -> Vec<u8> {
+    let kp = kp_from_bytes(
+        SignatureScheme::from_flag_byte(&in_scheme).unwrap(),
+        &prv_bytes,
+    )
+    .unwrap();
     let intent_msg = match intent {
         Some(inv) => inv,
         None => vec![0, 0, 0],
