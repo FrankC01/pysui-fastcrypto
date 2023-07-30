@@ -1,3 +1,9 @@
+//! pysui-fastcrypto is a python wrapper for fundental use by pysui crypto functions.
+//!
+//! Portions of the code in this crate were used from MystenLabs Sui repository
+//! pysui-fastcrypto, fastcrypto and Sui code are all licensed under the Apache License, Version 2.0
+//!
+
 use anyhow::{anyhow, Result};
 use base64ct::Encoding as _;
 use bip32::{ChildNumber, DerivationPath, XPrv};
@@ -71,21 +77,21 @@ pub enum SignatureScheme {
     ED25519,
     Secp256k1,
     Secp256r1,
-    BLS12381, // This is currently not supported for user Sui Address.
-    MultiSig,
-    ZkLoginAuthenticator,
+    BLS12381,             // This is currently not supported for user Sui Address.
+    MultiSig,             // This is handles directly in pysui
+    ZkLoginAuthenticator, // This is currently not supported in pysui
 }
 
 impl SignatureScheme {
-    /// Get the byte value of a scheme
+    /// Return the byte value of a scheme
     pub fn flag(&self) -> u8 {
         match self {
             SignatureScheme::ED25519 => 0x00,
             SignatureScheme::Secp256k1 => 0x01,
             SignatureScheme::Secp256r1 => 0x02,
-            SignatureScheme::MultiSig => 0x03,
+            SignatureScheme::MultiSig => 0x03, // This is handles directly in pysui
             SignatureScheme::BLS12381 => 0x04, // This is currently not supported for user Sui Address.
-            SignatureScheme::ZkLoginAuthenticator => 0x05,
+            SignatureScheme::ZkLoginAuthenticator => 0x05, // This is currently not supported in pysui
         }
     }
 
@@ -97,7 +103,7 @@ impl SignatureScheme {
         Self::from_flag_byte(&byte_int)
     }
 
-    /// Return a scheme from a bytes
+    /// Return a scheme from a byte
     pub fn from_flag_byte(byte_int: &u8) -> Result<SignatureScheme> {
         match byte_int {
             0x00 => Ok(SignatureScheme::ED25519),
@@ -205,7 +211,8 @@ fn keypair_from_keystring(keystring: String) -> Result<(SignatureScheme, SuiKeyP
     Ok((kscheme.clone(), kp_from_bytes(kscheme, &rembytes)?))
 }
 
-pub fn validate_path(
+/// Validate that the given path is correct in the context of the key scheme
+fn validate_path(
     key_scheme: &SignatureScheme,
     path: Option<DerivationPath>,
 ) -> Result<DerivationPath, LibError> {
@@ -348,7 +355,7 @@ fn derive_key_pair_from_path(
     }
 }
 
-/// Generate a new keypair with derivation path and optional mnemonic word lengths for phrase
+/// Generate a new keypair with optional derivation path and optional mnemonic word lengths for phrase
 fn new_keypair(
     scheme: u8,
     derivation_path: Option<String>,
@@ -401,7 +408,7 @@ fn parse_word_length(s: Option<String>) -> Result<MnemonicType, anyhow::Error> {
 /// Returns a keystrings scheme, public key bytes and a token from a Sui keystring.
 /// Assumes that the inbound keystring is valid (e.g. `flag | private_key bytes`)
 #[pyfunction]
-fn keys_from_keystring(in_str: String) -> (u8, Vec<u8>, Vec<u8>) {
+pub fn keys_from_keystring(in_str: String) -> (u8, Vec<u8>, Vec<u8>) {
     assert!(in_str.len() != 0, "Requires valid keystring");
     let (scheme, kp) = keypair_from_keystring(in_str).unwrap();
     (scheme.flag(), kp.pubkey().as_bytes(), kp.as_bytes())
@@ -410,7 +417,7 @@ fn keys_from_keystring(in_str: String) -> (u8, Vec<u8>, Vec<u8>) {
 /// Returns a new keystrings scheme, public and private key bytes and a token.
 /// Assumes that the inbound keystring is valid (e.g. `flag | private_key bytes`)
 #[pyfunction]
-fn generate_new_keypair(
+pub fn generate_new_keypair(
     in_scheme: u8,
     derv_path: Option<String>,
     word_count: Option<String>,
@@ -421,14 +428,19 @@ fn generate_new_keypair(
 
 /// Returns keystrings scheme, public and private key bytes from mnemonic phrase and derivation path
 #[pyfunction]
-fn keys_from_mnemonics(scheme: u8, derivation_path: String, phrase: String) -> (Vec<u8>, Vec<u8>) {
+pub fn keys_from_mnemonics(
+    scheme: u8,
+    derivation_path: String,
+    phrase: String,
+) -> (Vec<u8>, Vec<u8>) {
     let kp = recover_keypair(scheme, derivation_path, phrase).unwrap();
     (kp.pubkey().as_bytes(), kp.as_bytes())
 }
+
 /// Signs a message with optional intent, otherwise default is used
 /// The in_data string is the tx_bytes string
 #[pyfunction]
-fn sign_digest(
+pub fn sign_digest(
     in_scheme: u8,
     prv_bytes: Vec<u8>,
     in_data: String,
