@@ -10,11 +10,11 @@ use bip32::{ChildNumber, DerivationPath, XPrv};
 use bip39::{Language, Mnemonic, MnemonicType, Seed};
 
 use fastcrypto::{
-    ed25519::{Ed25519KeyPair, Ed25519PrivateKey, Ed25519PublicKey},
+    ed25519::{Ed25519KeyPair, Ed25519PrivateKey, Ed25519PublicKey, Ed25519Signature},
     hash::{Blake2b256, HashFunction},
-    secp256k1::{Secp256k1KeyPair, Secp256k1PrivateKey, Secp256k1PublicKey},
-    secp256r1::{Secp256r1KeyPair, Secp256r1PrivateKey, Secp256r1PublicKey},
-    traits::{KeyPair, Signer, ToFromBytes},
+    secp256k1::{Secp256k1KeyPair, Secp256k1PrivateKey, Secp256k1PublicKey, Secp256k1Signature},
+    secp256r1::{Secp256r1KeyPair, Secp256r1PrivateKey, Secp256r1PublicKey, Secp256r1Signature},
+    traits::{KeyPair, Signer, ToFromBytes, VerifyingKey},
 };
 use slip10_ed25519::derive_ed25519_private_key;
 use std::{collections::VecDeque, str::FromStr};
@@ -154,6 +154,24 @@ impl SuiKeyPair {
         };
         msg_sig
     }
+    /// Verify a signature
+    fn verify_signature(&self, message: &[u8], signature: &[u8]) -> Result<()> {
+        match self {
+            SuiKeyPair::Ed25519(kp) => {
+                let msg = Ed25519Signature::from_bytes(signature)?;
+                Ok(kp.public().verify(message, &msg)?)
+            }
+            SuiKeyPair::Secp256k1(kp) => {
+                let msg = Secp256k1Signature::from_bytes(signature)?;
+                Ok(kp.public().verify(message, &msg)?)
+            }
+            SuiKeyPair::Secp256r1(kp) => {
+                let msg = Secp256r1Signature::from_bytes(signature)?;
+                Ok(kp.public().verify(message, &msg)?)
+            }
+        }
+    }
+
     /// Get the public key of the keypair
     fn pubkey(&self) -> SuiPublicKey {
         match self {
@@ -437,7 +455,7 @@ pub fn keys_from_mnemonics(
     (kp.pubkey().as_bytes(), kp.as_bytes())
 }
 
-/// Signs a message with optional intent, otherwise default is used
+/// Signs a Sui transaction message with optional intent, otherwise default is used
 /// The in_data string is the tx_bytes string
 #[pyfunction]
 pub fn sign_digest(
@@ -465,6 +483,36 @@ pub fn sign_digest(
     sig
 }
 
+/// Signs arbitrary data (base64 string)
+#[pyfunction]
+pub fn sign_message(in_scheme: u8, prv_bytes: Vec<u8>, in_data: String) -> String {
+    let kp = kp_from_bytes(
+        SignatureScheme::from_flag_byte(&in_scheme).unwrap(),
+        &prv_bytes,
+    )
+    .unwrap();
+    let msg = Base64::decode(&in_data).unwrap();
+    let sig = kp.sign(&msg);
+    sig
+}
+
+/// Verify signature (base64 string) is valid for data (base64 string)
+#[pyfunction]
+pub fn verify(in_scheme: u8, prv_bytes: Vec<u8>, in_data: String, sig: String) -> bool {
+    let kp = kp_from_bytes(
+        SignatureScheme::from_flag_byte(&in_scheme).unwrap(),
+        &prv_bytes,
+    )
+    .unwrap();
+    match kp.verify_signature(
+        &Base64::decode(&in_data).unwrap(),
+        &Base64::decode(&sig).unwrap(),
+    ) {
+        Ok(_) => true,
+        Err(_) => false,
+    }
+}
+
 /// The pysui_fastcrypto module implemented in Rust.  In order
 /// to import the function name must match the Cargo.toml name
 #[pymodule]
@@ -473,6 +521,8 @@ fn pysui_fastcrypto(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(keys_from_mnemonics, m)?)?;
     m.add_function(wrap_pyfunction!(generate_new_keypair, m)?)?;
     m.add_function(wrap_pyfunction!(sign_digest, m)?)?;
+    m.add_function(wrap_pyfunction!(sign_message, m)?)?;
+    m.add_function(wrap_pyfunction!(verify, m)?)?;
 
     Ok(())
 }
