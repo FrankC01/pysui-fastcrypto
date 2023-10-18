@@ -11,10 +11,10 @@ name = "pysui-fastcrypto"
 description = "Python wrapper for MystenLab/fastcrypto Rust crate"
 readme = "README.rst"
 requires-python = ">=3.10"
-license = {file = "LICENSE"}
+license = { file = "LICENSE" }
 classifiers = [
   "Development Status :: 4 - Beta",
-  "Programming Language :: Python"
+  "Programming Language :: Python",
 ]
 
 [project.urls]
