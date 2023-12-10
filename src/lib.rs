@@ -423,7 +423,7 @@ fn parse_word_length(s: Option<String>) -> Result<MnemonicType, anyhow::Error> {
     }
 }
 
-/// Returns a keystrings scheme, public key bytes and a token from a Sui keystring.
+/// Returns a keystrings scheme, public and private key bytes and a token from a Sui keystring.
 /// Assumes that the inbound keystring is valid (e.g. `flag | private_key bytes`)
 #[pyfunction]
 pub fn keys_from_keystring(in_str: String) -> (u8, Vec<u8>, Vec<u8>) {
@@ -432,8 +432,7 @@ pub fn keys_from_keystring(in_str: String) -> (u8, Vec<u8>, Vec<u8>) {
     (scheme.flag(), kp.pubkey().as_bytes(), kp.as_bytes())
 }
 
-/// Returns a new keystrings scheme, public and private key bytes and a token.
-/// Assumes that the inbound keystring is valid (e.g. `flag | private_key bytes`)
+/// Returns a new keystring mnemonic phrase, public and private key bytes.
 #[pyfunction]
 pub fn generate_new_keypair(
     in_scheme: u8,
@@ -444,6 +443,12 @@ pub fn generate_new_keypair(
     (phrase, kp.pubkey().as_bytes(), kp.as_bytes())
 }
 
+/// Returns a mnemonic phrase of word_count words
+#[pyfunction]
+pub fn generate_mnemonic_phrase(work_count: Option<String>) -> String {
+    let mnemonic = Mnemonic::new(parse_word_length(work_count).unwrap(), Language::English);
+    mnemonic.phrase().to_string()
+}
 /// Returns keystrings scheme, public and private key bytes from mnemonic phrase and derivation path
 #[pyfunction]
 pub fn keys_from_mnemonics(
@@ -520,6 +525,7 @@ fn pysui_fastcrypto(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(keys_from_keystring, m)?)?;
     m.add_function(wrap_pyfunction!(keys_from_mnemonics, m)?)?;
     m.add_function(wrap_pyfunction!(generate_new_keypair, m)?)?;
+    m.add_function(wrap_pyfunction!(generate_mnemonic_phrase, m)?)?;
     m.add_function(wrap_pyfunction!(sign_digest, m)?)?;
     m.add_function(wrap_pyfunction!(sign_message, m)?)?;
     m.add_function(wrap_pyfunction!(verify, m)?)?;
