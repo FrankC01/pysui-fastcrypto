@@ -15,8 +15,8 @@ Building pysui-fastcrypto for Python
 3. Create a virtual environment - ``python3 -m venv env``
 4. Activate the environment - ``. env/bin/activate``
 5. Update pip if needed - ``pip install -U pip``
-6. Install maturin - ``pip install maturin``
-7. Build the crate and python wrapper - ``maturin develop``
+6. Install maturin - ``pip install -r requirements.txt``
+7. Build the create and python wrapper - ``maturin develop``
 
 The last step will compile the Rust crate and create a Python wheel and install `pysui-fastcrypto` in the virtual environment.
 

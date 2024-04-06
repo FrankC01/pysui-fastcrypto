@@ -11,6 +11,7 @@ use bip39::{Language, Mnemonic, MnemonicType, Seed};
 
 use fastcrypto::{
     ed25519::{Ed25519KeyPair, Ed25519PrivateKey, Ed25519PublicKey, Ed25519Signature},
+    encoding::Bech32,
     hash::{Blake2b256, HashFunction},
     secp256k1::{Secp256k1KeyPair, Secp256k1PrivateKey, Secp256k1PublicKey, Secp256k1Signature},
     secp256r1::{Secp256r1KeyPair, Secp256r1PrivateKey, Secp256r1PublicKey, Secp256r1Signature},
@@ -518,6 +519,25 @@ pub fn verify(in_scheme: u8, prv_bytes: Vec<u8>, in_data: String, sig: String) -
     }
 }
 
+/// Decode a bech32 signature to a Sui key set (sig, pub, prv)
+#[pyfunction]
+pub fn decode_bech32(key_string: String, hrp: String) -> (u8, Vec<u8>, Vec<u8>) {
+    let kbytes = match Bech32::decode(&key_string, &hrp) {
+        Ok(v) => v,
+        Err(_e) => return (255, [].into(), [].into()),
+    };
+    // let in_str = Base64::encode(kbytes);
+    keys_from_keystring(Base64::encode(kbytes))
+}
+
+/// Enchode a key from 'sig_scheme | prv_bytes' to bech32
+#[pyfunction]
+pub fn encode_bech32(prv_bytes: Vec<u8>, hrp: String) -> String {
+    match Bech32::encode(prv_bytes, &hrp) {
+        Ok(r) => r,
+        Err(_) => String::new(),
+    }
+}
 /// The pysui_fastcrypto module implemented in Rust.  In order
 /// to import the function name must match the Cargo.toml name
 #[pymodule]
@@ -529,6 +549,8 @@ fn pysui_fastcrypto(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(sign_digest, m)?)?;
     m.add_function(wrap_pyfunction!(sign_message, m)?)?;
     m.add_function(wrap_pyfunction!(verify, m)?)?;
+    m.add_function(wrap_pyfunction!(decode_bech32, m)?)?;
+    m.add_function(wrap_pyfunction!(encode_bech32, m)?)?;
 
     Ok(())
 }
