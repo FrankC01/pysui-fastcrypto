@@ -8,7 +8,7 @@ features = ["pyo3/extension-module"]
 
 [project]
 name = "pysui-fastcrypto"
-version = "0.5.1"
+version = "0.6.0"
 description = "Python wrapper for MystenLab/fastcrypto Rust crate"
 readme = "README.rst"
 requires-python = ">=3.10"

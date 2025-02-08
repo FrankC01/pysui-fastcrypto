@@ -502,7 +502,7 @@ pub fn sign_message(in_scheme: u8, prv_bytes: Vec<u8>, in_data: String) -> Strin
     sig
 }
 
-/// Verify signature (base64 string) is valid for data (base64 string)
+/// Verify signature (base64 string) is valid for data (base64 string) using private key
 #[pyfunction]
 pub fn verify(in_scheme: u8, prv_bytes: Vec<u8>, in_data: String, sig: String) -> bool {
     let kp = kp_from_bytes(
@@ -514,6 +514,38 @@ pub fn verify(in_scheme: u8, prv_bytes: Vec<u8>, in_data: String, sig: String) -
         &Base64::decode(&in_data).unwrap(),
         &Base64::decode(&sig).unwrap(),
     ) {
+        Ok(_) => true,
+        Err(_) => false,
+    }
+}
+
+/// Verify signature (base64 string) is valid for data (base64 string) using public key
+#[pyfunction]
+pub fn verify_pubk(in_scheme: u8, pub_bytes: Vec<u8>, in_data: String, sig: String) -> bool {
+    let scheme = SignatureScheme::from_flag_byte(&in_scheme).unwrap();
+    let result = match scheme {
+        SignatureScheme::ED25519 => {
+            let sui_pub = Ed25519PublicKey::from_bytes(&pub_bytes).unwrap();
+            let siggy = Ed25519Signature::from_bytes(&Base64::decode(&sig).unwrap()).unwrap();
+            sui_pub.verify(&Base64::decode(&in_data).unwrap(), &siggy)
+        }
+        SignatureScheme::Secp256k1 => {
+            let sui_pub = Secp256k1PublicKey::from_bytes(&pub_bytes).unwrap();
+
+            let siggy = Secp256k1Signature::from_bytes(&Base64::decode(&sig).unwrap()).unwrap();
+            sui_pub.verify(&Base64::decode(&in_data).unwrap(), &siggy)
+        }
+        SignatureScheme::Secp256r1 => {
+            let sui_pub = Secp256r1PublicKey::from_bytes(&pub_bytes).unwrap();
+            let siggy = Secp256r1Signature::from_bytes(&Base64::decode(&sig).unwrap()).unwrap();
+            sui_pub.verify(&Base64::decode(&in_data).unwrap(), &siggy)
+        }
+        SignatureScheme::BLS12381 => todo!(),
+        SignatureScheme::MultiSig => todo!(),
+        SignatureScheme::ZkLoginAuthenticator => todo!(),
+    };
+
+    match result {
         Ok(_) => true,
         Err(_) => false,
     }
@@ -549,6 +581,7 @@ fn pysui_fastcrypto(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(sign_digest, m)?)?;
     m.add_function(wrap_pyfunction!(sign_message, m)?)?;
     m.add_function(wrap_pyfunction!(verify, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_pubk, m)?)?;
     m.add_function(wrap_pyfunction!(decode_bech32, m)?)?;
     m.add_function(wrap_pyfunction!(encode_bech32, m)?)?;
 
