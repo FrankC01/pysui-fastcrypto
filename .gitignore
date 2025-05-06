@@ -3,3 +3,4 @@ target
 .python-version
 .dist
 *.py
+notes.txt
