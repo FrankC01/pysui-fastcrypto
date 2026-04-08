@@ -110,14 +110,14 @@ jobs:
       # Used to generate artifact attestation
       attestations: write
     steps:
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
       - name: Generate artifact attestation
         uses: actions/attest-build-provenance@v3
         with:
           subject-path: 'wheels-*/*'
       # Linux Arm
       - name: Download Linux aarch64 artifact          
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: wheels-linux-aarch64
           path: artifacts/linux/aarch64  
@@ -137,7 +137,7 @@ jobs:
           asset_content_type: application/zip
       # Linux intel
       - name: Download Linux x86_64 artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: wheels-linux-x86_64
           path: artifacts/linux/x86_64
@@ -158,7 +158,7 @@ jobs:
 
       # macos ARM
       - name: Download macos aarch64 artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: wheels-macos-aarch64
           path: artifacts/macos/aarch64
@@ -178,7 +178,7 @@ jobs:
           asset_content_type: application/zip
       # macos intel
       - name: Download macos x86_64 artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: wheels-macos-x86_64
           path: artifacts/macos/x86_64
@@ -199,7 +199,7 @@ jobs:
 
       # Windows intel
       - name: Download win x86_64 artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: wheels-windows-x64
           path: artifacts/win/x64
