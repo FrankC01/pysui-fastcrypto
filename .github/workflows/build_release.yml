@@ -76,8 +76,8 @@ jobs:
     strategy:
       matrix:
         platform:
-          - runner: macos-15-intel
-            target: x86_64
+          # - runner: macos-15-intel
+          #   target: x86_64
           - runner: macos-latest
             target: aarch64
     steps:
@@ -178,25 +178,25 @@ jobs:
           asset_name: ${{env.REL_REPO}}-${{env.REL_VERSION}}-macos-aarch64.zip
           asset_content_type: application/zip
       # macos intel
-      - name: Download macos x86_64 artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: wheels-macos-x86_64
-          path: artifacts/macos/x86_64
-      - name: Zip artifact
-        run: |
-          echo "${{env.REL_REPO}}-${{env.REL_VERSION}}-macos-x86_64"
-          cd artifacts/macos/x86_64
-          zip -r ${{env.REL_REPO}}-${{env.REL_VERSION}}-macos-x86_64.zip . 
-      - name: upload darwin artifact x86_64
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: artifacts/macos/x86_64/${{env.REL_REPO}}-${{env.REL_VERSION}}-macos-x86_64.zip
-          asset_name: ${{env.REL_REPO}}-${{env.REL_VERSION}}-macos-x86_64.zip
-          asset_content_type: application/zip
+      # - name: Download macos x86_64 artifact
+      #   uses: actions/download-artifact@v8
+      #   with:
+      #     name: wheels-macos-x86_64
+      #     path: artifacts/macos/x86_64
+      # - name: Zip artifact
+      #   run: |
+      #     echo "${{env.REL_REPO}}-${{env.REL_VERSION}}-macos-x86_64"
+      #     cd artifacts/macos/x86_64
+      #     zip -r ${{env.REL_REPO}}-${{env.REL_VERSION}}-macos-x86_64.zip . 
+      # - name: upload darwin artifact x86_64
+      #   uses: actions/upload-release-asset@v1
+      #   env:
+      #     GITHUB_TOKEN: ${{ github.token }}
+      #   with:
+      #     upload_url: ${{ github.event.release.upload_url }}
+      #     asset_path: artifacts/macos/x86_64/${{env.REL_REPO}}-${{env.REL_VERSION}}-macos-x86_64.zip
+      #     asset_name: ${{env.REL_REPO}}-${{env.REL_VERSION}}-macos-x86_64.zip
+      #     asset_content_type: application/zip
 
       # Windows intel
       - name: Download win x86_64 artifact
