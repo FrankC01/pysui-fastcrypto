@@ -5,24 +5,6 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.7.5] - 2026-04-09
-
-### Fixed
-
-- Replease maturin github build with cibuildwheel
-
-## [0.7.4] - 2026-04-08
-
-### Fixed
-
-- Github build
-
-## [0.7.3] - 2026-04-08
-
-### Fixed
-
-- Github build
-
 ## [0.7.2] - 2026-04-08
 
 ### Added
@@ -153,7 +135,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated README.rst
 
 ### Removed
-
 
 ## [0.1.3] - 2023-07-28
 
