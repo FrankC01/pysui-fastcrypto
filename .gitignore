@@ -4,5 +4,9 @@ env
 target
 .python-version
 .dist
-*.py
 notes.txt
+.claude/
+memory/
+__pycache__/
+*.pyc
+*.pyo
