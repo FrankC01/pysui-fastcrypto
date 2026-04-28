@@ -435,6 +435,7 @@ pub fn keys_from_keystring(in_str: String) -> (u8, Vec<u8>, Vec<u8>) {
 
 /// Returns a new keystring mnemonic phrase, public and private key bytes.
 #[pyfunction]
+#[pyo3(signature = (in_scheme, derv_path=None, word_count=None))]
 pub fn generate_new_keypair(
     in_scheme: u8,
     derv_path: Option<String>,
@@ -446,6 +447,7 @@ pub fn generate_new_keypair(
 
 /// Returns a mnemonic phrase of word_count words
 #[pyfunction]
+#[pyo3(signature = (work_count=None))]
 pub fn generate_mnemonic_phrase(work_count: Option<String>) -> String {
     let mnemonic = Mnemonic::new(parse_word_length(work_count).unwrap(), Language::English);
     mnemonic.phrase().to_string()
@@ -464,6 +466,7 @@ pub fn keys_from_mnemonics(
 /// Signs a Sui transaction message with optional intent, otherwise default is used
 /// The in_data string is the tx_bytes string
 #[pyfunction]
+#[pyo3(signature = (in_scheme, prv_bytes, in_data, intent=None))]
 pub fn sign_digest(
     in_scheme: u8,
     prv_bytes: Vec<u8>,
@@ -573,7 +576,7 @@ pub fn encode_bech32(prv_bytes: Vec<u8>, hrp: String) -> String {
 /// The pysui_fastcrypto module implemented in Rust.  In order
 /// to import the function name must match the Cargo.toml name
 #[pymodule]
-fn pysui_fastcrypto(_py: Python, m: &PyModule) -> PyResult<()> {
+fn pysui_fastcrypto(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(keys_from_keystring, m)?)?;
     m.add_function(wrap_pyfunction!(keys_from_mnemonics, m)?)?;
     m.add_function(wrap_pyfunction!(generate_new_keypair, m)?)?;
@@ -586,4 +589,81 @@ fn pysui_fastcrypto(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(encode_bech32, m)?)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_scheme_flag_round_trip() {
+        for byte in 0u8..=5u8 {
+            let scheme = SignatureScheme::from_flag_byte(&byte).unwrap();
+            assert_eq!(scheme.flag(), byte);
+        }
+    }
+
+    #[test]
+    fn test_scheme_from_flag_invalid() {
+        assert!(SignatureScheme::from_flag_byte(&6).is_err());
+        assert!(SignatureScheme::from_flag_byte(&255).is_err());
+    }
+
+    #[test]
+    fn test_parse_word_length_all() {
+        assert!(parse_word_length(None).is_ok());
+        assert!(parse_word_length(Some("12".to_string())).is_ok());
+        assert!(parse_word_length(Some("15".to_string())).is_ok());
+        assert!(parse_word_length(Some("18".to_string())).is_ok());
+        assert!(parse_word_length(Some("21".to_string())).is_ok());
+        assert!(parse_word_length(Some("24".to_string())).is_ok());
+    }
+
+    #[test]
+    fn test_parse_word_length_invalid() {
+        assert!(parse_word_length(Some("10".to_string())).is_err());
+        assert!(parse_word_length(Some("invalid".to_string())).is_err());
+    }
+
+    #[test]
+    fn test_base64_round_trip() {
+        let data = b"hello world";
+        let encoded = Base64::encode(data);
+        let decoded = Base64::decode(&encoded).unwrap();
+        assert_eq!(decoded, data);
+    }
+
+    #[test]
+    fn test_base64_decode_invalid() {
+        assert!(Base64::decode("!!!invalid!!!").is_err());
+    }
+
+    #[test]
+    fn test_validate_path_ed25519_default() {
+        let path = validate_path(&SignatureScheme::ED25519, None).unwrap();
+        assert_eq!(path.as_ref().len(), 5);
+    }
+
+    #[test]
+    fn test_validate_path_secp256k1_default() {
+        let path = validate_path(&SignatureScheme::Secp256k1, None).unwrap();
+        assert_eq!(path.as_ref().len(), 5);
+    }
+
+    #[test]
+    fn test_validate_path_secp256r1_default() {
+        let path = validate_path(&SignatureScheme::Secp256r1, None).unwrap();
+        assert_eq!(path.as_ref().len(), 5);
+    }
+
+    #[test]
+    fn test_validate_path_ed25519_invalid_purpose() {
+        let invalid_path = "m/45'/784'/0'/0'/0'".parse().unwrap();
+        assert!(validate_path(&SignatureScheme::ED25519, Some(invalid_path)).is_err());
+    }
+
+    #[test]
+    fn test_validate_path_bls_unsupported() {
+        assert!(validate_path(&SignatureScheme::BLS12381, None).is_err());
+    }
 }
