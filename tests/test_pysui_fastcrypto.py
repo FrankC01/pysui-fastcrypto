@@ -138,3 +138,93 @@ class TestBech32:
         bech32_str = fc.encode_bech32(prv_bytes, "sui")
         scheme, _, _ = fc.decode_bech32(bech32_str, "invalid")
         assert scheme == 255
+
+    def test_decode_bech32_correct_round_trip(self):
+        _, pub_bytes, prv_bytes = fc.generate_new_keypair(0)
+        encoded = fc.encode_bech32(bytes([0]) + prv_bytes, "sui")
+        scheme, decoded_pub, decoded_prv = fc.decode_bech32(encoded, "sui")
+        assert scheme == 0
+        assert decoded_pub == pub_bytes
+        assert decoded_prv == prv_bytes
+
+
+class TestVerifyPubk:
+    def test_verify_pubk_ed25519(self):
+        _, pub_bytes, prv_bytes = fc.generate_new_keypair(0)
+        msg_b64 = "aGVsbG8gd29ybGQ="  # "hello world"
+        sig = fc.sign_message(0, prv_bytes, msg_b64)
+        assert fc.verify_pubk(0, pub_bytes, msg_b64, sig) is True
+
+    def test_verify_pubk_returns_false_on_wrong_sig(self):
+        import base64
+        _, pub_bytes, _ = fc.generate_new_keypair(0)
+        msg_b64 = "aGVsbG8="
+        bad_sig_b64 = base64.b64encode(b"x" * 64).decode()
+        assert fc.verify_pubk(0, pub_bytes, msg_b64, bad_sig_b64) is False
+
+
+class TestErrors:
+    def test_keys_from_keystring_empty(self):
+        with pytest.raises(ValueError):
+            fc.keys_from_keystring("")
+
+    def test_keys_from_keystring_invalid_base64(self):
+        with pytest.raises(ValueError):
+            fc.keys_from_keystring("!!!")
+
+    def test_generate_new_keypair_bad_scheme(self):
+        with pytest.raises(ValueError):
+            fc.generate_new_keypair(6)
+
+    def test_generate_new_keypair_bad_path(self):
+        with pytest.raises(ValueError):
+            fc.generate_new_keypair(0, derv_path="bad/path")
+
+    def test_generate_new_keypair_bad_word_count(self):
+        with pytest.raises(ValueError):
+            fc.generate_new_keypair(0, word_count="13")
+
+    def test_generate_mnemonic_bad_word_count(self):
+        with pytest.raises(ValueError):
+            fc.generate_mnemonic_phrase("13")
+
+    def test_keys_from_mnemonics_bad_phrase(self):
+        with pytest.raises(ValueError):
+            fc.keys_from_mnemonics(0, "m/44'/784'/0'/0'/0'", "aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj kkkk llll")
+
+    def test_sign_digest_bad_scheme(self):
+        with pytest.raises(ValueError):
+            fc.sign_digest(6, bytes(32), "aGVsbG8=")
+
+    def test_sign_digest_bad_base64(self):
+        _, _, prv_bytes = fc.generate_new_keypair(0)
+        with pytest.raises(ValueError):
+            fc.sign_digest(0, prv_bytes, "!!!")
+
+    def test_sign_message_bad_scheme(self):
+        with pytest.raises(ValueError):
+            fc.sign_message(6, bytes(32), "aGVsbG8=")
+
+    def test_verify_bad_scheme(self):
+        import base64
+        with pytest.raises(ValueError):
+            fc.verify(6, bytes(32), "aGVsbG8=", base64.b64encode(b"x" * 64).decode())
+
+    def test_verify_pubk_bad_scheme(self):
+        import base64
+        with pytest.raises(ValueError):
+            fc.verify_pubk(6, bytes(32), "aGVsbG8=", base64.b64encode(b"x" * 64).decode())
+
+    def test_verify_pubk_unsupported_scheme(self):
+        import base64
+        with pytest.raises(ValueError):
+            fc.verify_pubk(3, bytes(48), "aGVsbG8=", base64.b64encode(b"x" * 64).decode())
+
+    def test_verify_pubk_bad_pub_bytes(self):
+        import base64
+        bad_sig_b64 = base64.b64encode(b"x" * 64).decode()
+        try:
+            result = fc.verify_pubk(0, bytes(32), "aGVsbG8=", bad_sig_b64)
+            assert result is False
+        except ValueError:
+            pass

@@ -1,4 +1,4 @@
-//! pysui-fastcrypto is a python wrapper for fundental use by pysui crypto functions.
+//! pysui-fastcrypto is a python wrapper for fundamental use by pysui crypto functions.
 //!
 //! Portions of the code in this crate were used from MystenLabs Sui repository
 //! pysui-fastcrypto, fastcrypto and Sui code are all licensed under the Apache License, Version 2.0
@@ -18,49 +18,23 @@ use fastcrypto::{
     traits::{KeyPair, Signer, ToFromBytes, VerifyingKey},
 };
 use slip10_ed25519::derive_ed25519_private_key;
-use std::{collections::VecDeque, str::FromStr};
+use std::str::FromStr;
 
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 type LibError = anyhow::Error;
-pub type DefaultHash = Blake2b256;
+type DefaultHash = Blake2b256;
 const DERIVATION_PATH_COIN_TYPE: u32 = 784;
 const DERVIATION_PATH_PURPOSE_ED25519: u32 = 44;
 const DERVIATION_PATH_PURPOSE_SECP256K1: u32 = 54;
 const DERVIATION_PATH_PURPOSE_SECP256R1: u32 = 74;
 
-/// Trait representing a general binary-to-string encoding.
-pub trait Encoding {
-    /// Decode this encoding into bytes.
+trait Encoding {
     fn decode(s: &str) -> Result<Vec<u8>>;
-    /// Encode bytes into a string.
     fn encode<T: AsRef<[u8]>>(data: T) -> String;
 }
-pub struct Base64(String);
-
-impl TryFrom<String> for Base64 {
-    type Error = LibError;
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        // Make sure the value is valid base64 string.
-        Base64::decode(&value)?;
-        Ok(Self(value))
-    }
-}
-
-impl Base64 {
-    /// Decodes this Base64 encoding to bytes.
-    pub fn to_vec(&self) -> Result<Vec<u8>, LibError> {
-        Self::decode(&self.0)
-    }
-    /// Encodes bytes as a Base64.
-    pub fn from_bytes(bytes: &[u8]) -> Self {
-        Self(Self::encode(bytes))
-    }
-    /// Get a string representation of this Base64 encoding.
-    pub fn encoded(&self) -> String {
-        self.0.clone()
-    }
-}
+struct Base64;
 
 impl Encoding for Base64 {
     fn decode(s: &str) -> Result<Vec<u8>, LibError> {
@@ -74,38 +48,28 @@ impl Encoding for Base64 {
 
 /// Signature Schemes supported by Sui
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SignatureScheme {
+enum SignatureScheme {
     ED25519,
     Secp256k1,
     Secp256r1,
-    BLS12381,             // This is currently not supported for user Sui Address.
-    MultiSig,             // This is handles directly in pysui
-    ZkLoginAuthenticator, // This is currently not supported in pysui
+    BLS12381,             // Not supported for user Sui Address.
+    MultiSig,             // Handled directly in pysui.
+    ZkLoginAuthenticator, // Not supported in pysui.
 }
 
 impl SignatureScheme {
-    /// Return the byte value of a scheme
-    pub fn flag(&self) -> u8 {
+    fn flag(&self) -> u8 {
         match self {
             SignatureScheme::ED25519 => 0x00,
             SignatureScheme::Secp256k1 => 0x01,
             SignatureScheme::Secp256r1 => 0x02,
-            SignatureScheme::MultiSig => 0x03, // This is handles directly in pysui
-            SignatureScheme::BLS12381 => 0x04, // This is currently not supported for user Sui Address.
-            SignatureScheme::ZkLoginAuthenticator => 0x05, // This is currently not supported in pysui
+            SignatureScheme::MultiSig => 0x03,
+            SignatureScheme::BLS12381 => 0x04,
+            SignatureScheme::ZkLoginAuthenticator => 0x05,
         }
     }
 
-    /// Return a scheme from a string
-    pub fn from_flag(flag: &str) -> Result<SignatureScheme> {
-        let byte_int = flag
-            .parse::<u8>()
-            .map_err(|_| anyhow!("Invalid key scheme".to_string()))?;
-        Self::from_flag_byte(&byte_int)
-    }
-
-    /// Return a scheme from a byte
-    pub fn from_flag_byte(byte_int: &u8) -> Result<SignatureScheme> {
+    fn from_flag_byte(byte_int: &u8) -> Result<SignatureScheme> {
         match byte_int {
             0x00 => Ok(SignatureScheme::ED25519),
             0x01 => Ok(SignatureScheme::Secp256k1),
@@ -113,21 +77,20 @@ impl SignatureScheme {
             0x03 => Ok(SignatureScheme::MultiSig),
             0x04 => Ok(SignatureScheme::BLS12381),
             0x05 => Ok(SignatureScheme::ZkLoginAuthenticator),
-            _ => Err(anyhow!("Invalid key scheme".to_string())),
+            _ => Err(anyhow!("Invalid key scheme")),
         }
     }
 }
 
 /// Basic PublicKey
 #[derive(Debug, PartialEq, Eq)]
-pub enum SuiPublicKey {
+enum SuiPublicKey {
     Ed25519(Ed25519PublicKey),
     Secp256k1(Secp256k1PublicKey),
     Secp256r1(Secp256r1PublicKey),
 }
 
 impl SuiPublicKey {
-    /// Get bytes for public key
     fn as_bytes(&self) -> Vec<u8> {
         match self {
             SuiPublicKey::Ed25519(pk) => pk.as_bytes().to_vec(),
@@ -139,23 +102,21 @@ impl SuiPublicKey {
 
 /// Keypair for signing
 #[derive(Debug, PartialEq, Eq)]
-pub enum SuiKeyPair {
+enum SuiKeyPair {
     Ed25519(Ed25519KeyPair),
     Secp256k1(Secp256k1KeyPair),
     Secp256r1(Secp256r1KeyPair),
 }
 
 impl SuiKeyPair {
-    /// Sign a blake2b hashed value
-    fn sign(&self, msg: &[u8]) -> String {
-        let msg_sig = match self {
-            SuiKeyPair::Ed25519(kp) => kp.sign(msg).to_string(),
-            SuiKeyPair::Secp256k1(kp) => kp.sign(msg).to_string(),
-            SuiKeyPair::Secp256r1(kp) => kp.sign(msg).to_string(),
-        };
-        msg_sig
+    fn sign(&self, msg: &[u8]) -> Vec<u8> {
+        match self {
+            SuiKeyPair::Ed25519(kp) => kp.sign(msg).as_bytes().to_vec(),
+            SuiKeyPair::Secp256k1(kp) => kp.sign(msg).as_bytes().to_vec(),
+            SuiKeyPair::Secp256r1(kp) => kp.sign(msg).as_bytes().to_vec(),
+        }
     }
-    /// Verify a signature
+
     fn verify_signature(&self, message: &[u8], signature: &[u8]) -> Result<()> {
         match self {
             SuiKeyPair::Ed25519(kp) => {
@@ -173,7 +134,6 @@ impl SuiKeyPair {
         }
     }
 
-    /// Get the public key of the keypair
     fn pubkey(&self) -> SuiPublicKey {
         match self {
             SuiKeyPair::Ed25519(kp) => SuiPublicKey::Ed25519(kp.public().clone()),
@@ -182,7 +142,6 @@ impl SuiKeyPair {
         }
     }
 
-    /// Get the scheme of the keypair
     fn scheme(&self) -> SignatureScheme {
         match self {
             SuiKeyPair::Ed25519(_) => SignatureScheme::ED25519,
@@ -191,7 +150,6 @@ impl SuiKeyPair {
         }
     }
 
-    /// Get the private key bytes
     fn as_bytes(&self) -> Vec<u8> {
         match self {
             SuiKeyPair::Ed25519(kp) => kp.as_bytes().to_vec(),
@@ -201,33 +159,35 @@ impl SuiKeyPair {
     }
 }
 
-/// Construct a SuiKeyPair from seed
+/// Construct a SuiKeyPair from seed bytes
 fn kp_from_bytes(kscheme: SignatureScheme, seed: &[u8]) -> Result<SuiKeyPair, LibError> {
     match kscheme {
         SignatureScheme::ED25519 => Ok(SuiKeyPair::Ed25519(
-            Ed25519KeyPair::from_bytes(seed).unwrap(),
+            Ed25519KeyPair::from_bytes(seed).map_err(|e| anyhow!("{:?}", e))?,
         )),
         SignatureScheme::Secp256k1 => Ok(SuiKeyPair::Secp256k1(
-            Secp256k1KeyPair::from_bytes(seed).unwrap(),
+            Secp256k1KeyPair::from_bytes(seed).map_err(|e| anyhow!("{:?}", e))?,
         )),
         SignatureScheme::Secp256r1 => Ok(SuiKeyPair::Secp256r1(
-            Secp256r1KeyPair::from_bytes(seed).unwrap(),
+            Secp256r1KeyPair::from_bytes(seed).map_err(|e| anyhow!("{:?}", e))?,
         )),
         SignatureScheme::BLS12381
         | SignatureScheme::MultiSig
-        | SignatureScheme::ZkLoginAuthenticator => Err(anyhow!(format!(
+        | SignatureScheme::ZkLoginAuthenticator => Err(anyhow!(
             "key derivation not supported {:?}",
             kscheme
-        ))),
+        )),
     }
 }
 
 /// Given a keystring, produce a keypair
 fn keypair_from_keystring(keystring: String) -> Result<(SignatureScheme, SuiKeyPair), LibError> {
-    let b64b = &mut VecDeque::from(Base64::decode(&keystring)?);
-    let kscheme = SignatureScheme::from_flag_byte(&b64b.pop_front().unwrap())?;
-    let rembytes = b64b.make_contiguous();
-    Ok((kscheme.clone(), kp_from_bytes(kscheme, &rembytes)?))
+    let decoded = Base64::decode(&keystring)?;
+    if decoded.is_empty() {
+        return Err(anyhow!("Empty keystring"));
+    }
+    let kscheme = SignatureScheme::from_flag_byte(&decoded[0])?;
+    Ok((kscheme.clone(), kp_from_bytes(kscheme, &decoded[1..])?))
 }
 
 /// Validate that the given path is correct in the context of the key scheme
@@ -237,94 +197,91 @@ fn validate_path(
 ) -> Result<DerivationPath, LibError> {
     match key_scheme {
         SignatureScheme::ED25519 => {
-            match path.clone() {
-                Some(p) => {
-                    // The derivation path must be hardened at all levels with purpose = 44, coin_type = 784
-                    if let &[purpose, coin_type, account, change, address] = p.as_ref() {
-                        if Some(purpose)
-                            == ChildNumber::new(DERVIATION_PATH_PURPOSE_ED25519, true).ok()
-                            && Some(coin_type)
-                                == ChildNumber::new(DERIVATION_PATH_COIN_TYPE, true).ok()
-                            && account.is_hardened()
-                            && change.is_hardened()
-                            && address.is_hardened()
-                        {
-                            Ok(p)
-                        } else {
-                            Err(anyhow!(format!("Invalid derivation path{:?}", path)))
-                        }
+            if let Some(p) = path {
+                // The derivation path must be hardened at all levels with purpose = 44, coin_type = 784
+                if let &[purpose, coin_type, account, change, address] = p.as_ref() {
+                    if Some(purpose) == ChildNumber::new(DERVIATION_PATH_PURPOSE_ED25519, true).ok()
+                        && Some(coin_type)
+                            == ChildNumber::new(DERIVATION_PATH_COIN_TYPE, true).ok()
+                        && account.is_hardened()
+                        && change.is_hardened()
+                        && address.is_hardened()
+                    {
+                        Ok(p)
                     } else {
-                        Err(anyhow!(format!("Invalid derivatyion path{:?}", path)))
+                        Err(anyhow!("Invalid derivation path {:?}", p))
                     }
+                } else {
+                    Err(anyhow!("Invalid derivation path {:?}", p))
                 }
-                None => Ok(format!(
+            } else {
+                Ok(format!(
                     "m/{DERVIATION_PATH_PURPOSE_ED25519}'/{DERIVATION_PATH_COIN_TYPE}'/0'/0'/0'"
                 )
                 .parse()
-                .map_err(|_| anyhow!(format!("Can not parse derivation path{:?}", path)))?),
+                .map_err(|_| anyhow!("Cannot parse default ED25519 derivation path"))?)
             }
         }
         SignatureScheme::Secp256k1 => {
-            match path.clone() {
-                Some(p) => {
-                    // The derivation path must be hardened at first 3 levels with purpose = 54, coin_type = 784
-                    if let &[purpose, coin_type, account, change, address] = p.as_ref() {
-                        if Some(purpose)
-                            == ChildNumber::new(DERVIATION_PATH_PURPOSE_SECP256K1, true).ok()
-                            && Some(coin_type)
-                                == ChildNumber::new(DERIVATION_PATH_COIN_TYPE, true).ok()
-                            && account.is_hardened()
-                            && !change.is_hardened()
-                            && !address.is_hardened()
-                        {
-                            Ok(p)
-                        } else {
-                            Err(anyhow!(format!("Invalid derivation path{:?}", path)))
-                        }
+            if let Some(p) = path {
+                // The derivation path must be hardened at first 3 levels with purpose = 54, coin_type = 784
+                if let &[purpose, coin_type, account, change, address] = p.as_ref() {
+                    if Some(purpose)
+                        == ChildNumber::new(DERVIATION_PATH_PURPOSE_SECP256K1, true).ok()
+                        && Some(coin_type)
+                            == ChildNumber::new(DERIVATION_PATH_COIN_TYPE, true).ok()
+                        && account.is_hardened()
+                        && !change.is_hardened()
+                        && !address.is_hardened()
+                    {
+                        Ok(p)
                     } else {
-                        Err(anyhow!(format!("Invalid derivatyion path{:?}", path)))
+                        Err(anyhow!("Invalid derivation path {:?}", p))
                     }
+                } else {
+                    Err(anyhow!("Invalid derivation path {:?}", p))
                 }
-                None => Ok(format!(
+            } else {
+                Ok(format!(
                     "m/{DERVIATION_PATH_PURPOSE_SECP256K1}'/{DERIVATION_PATH_COIN_TYPE}'/0'/0/0"
                 )
                 .parse()
-                .map_err(|_| anyhow!(format!("Can not parse derivation path{:?}", path)))?),
+                .map_err(|_| anyhow!("Cannot parse default Secp256k1 derivation path"))?)
             }
         }
         SignatureScheme::Secp256r1 => {
-            match path.clone() {
-                Some(p) => {
-                    // The derivation path must be hardened at first 3 levels with purpose = 74, coin_type = 784
-                    if let &[purpose, coin_type, account, change, address] = p.as_ref() {
-                        if Some(purpose)
-                            == ChildNumber::new(DERVIATION_PATH_PURPOSE_SECP256R1, true).ok()
-                            && Some(coin_type)
-                                == ChildNumber::new(DERIVATION_PATH_COIN_TYPE, true).ok()
-                            && account.is_hardened()
-                            && !change.is_hardened()
-                            && !address.is_hardened()
-                        {
-                            Ok(p)
-                        } else {
-                            Err(anyhow!(format!("Invalid derivation path{:?}", path)))
-                        }
+            if let Some(p) = path {
+                // The derivation path must be hardened at first 3 levels with purpose = 74, coin_type = 784
+                if let &[purpose, coin_type, account, change, address] = p.as_ref() {
+                    if Some(purpose)
+                        == ChildNumber::new(DERVIATION_PATH_PURPOSE_SECP256R1, true).ok()
+                        && Some(coin_type)
+                            == ChildNumber::new(DERIVATION_PATH_COIN_TYPE, true).ok()
+                        && account.is_hardened()
+                        && !change.is_hardened()
+                        && !address.is_hardened()
+                    {
+                        Ok(p)
                     } else {
-                        Err(anyhow!(format!("Invalid derivatyion path{:?}", path)))
+                        Err(anyhow!("Invalid derivation path {:?}", p))
                     }
+                } else {
+                    Err(anyhow!("Invalid derivation path {:?}", p))
                 }
-                None => Ok(format!(
+            } else {
+                Ok(format!(
                     "m/{DERVIATION_PATH_PURPOSE_SECP256R1}'/{DERIVATION_PATH_COIN_TYPE}'/0'/0/0"
                 )
                 .parse()
-                .map_err(|_| anyhow!(format!("Can not parse derivation path{:?}", path)))?),
+                .map_err(|_| anyhow!("Cannot parse default Secp256r1 derivation path"))?)
             }
         }
         SignatureScheme::BLS12381
         | SignatureScheme::MultiSig
-        | SignatureScheme::ZkLoginAuthenticator => Err(anyhow! {
-            format!("key derivation not supported {:?}", key_scheme),
-        }),
+        | SignatureScheme::ZkLoginAuthenticator => Err(anyhow!(
+            "key derivation not supported {:?}",
+            key_scheme,
+        )),
     }
 }
 
@@ -343,49 +300,49 @@ fn derive_key_pair_from_path(
                 .collect::<Vec<_>>();
             let derived = derive_ed25519_private_key(seed, &indexes);
             let sk = Ed25519PrivateKey::from_bytes(&derived)
-                .map_err(|e| anyhow!(format!("KeyGen error{:?}", e.to_string())))?;
+                .map_err(|e| anyhow!("KeyGen error {:?}", e.to_string()))?;
             let kp: Ed25519KeyPair = sk.into();
             Ok(SuiKeyPair::Ed25519(kp))
         }
         SignatureScheme::Secp256k1 => {
             let child_xprv = XPrv::derive_from_path(seed, &derivation_path)
-                .map_err(|e| anyhow!(format!("KeyGen error{:?}", e.to_string())))?;
+                .map_err(|e| anyhow!("KeyGen error {:?}", e.to_string()))?;
             let kp = Secp256k1KeyPair::from(
                 Secp256k1PrivateKey::from_bytes(child_xprv.private_key().to_bytes().as_slice())
-                    .map_err(|e| anyhow!(format!("KeyGen error{:?}", e.to_string())))?,
+                    .map_err(|e| anyhow!("KeyGen error {:?}", e.to_string()))?,
             );
             Ok(SuiKeyPair::Secp256k1(kp))
         }
         SignatureScheme::Secp256r1 => {
             let child_xprv = XPrv::derive_from_path(seed, &derivation_path)
-                .map_err(|e| anyhow!(format!("KeyGen error{:?}", e.to_string())))?;
+                .map_err(|e| anyhow!("KeyGen error {:?}", e.to_string()))?;
             let kp = Secp256r1KeyPair::from(
                 Secp256r1PrivateKey::from_bytes(child_xprv.private_key().to_bytes().as_slice())
-                    .map_err(|e| anyhow!(format!("KeyGen error{:?}", e.to_string())))?,
+                    .map_err(|e| anyhow!("KeyGen error {:?}", e.to_string()))?,
             );
             Ok(SuiKeyPair::Secp256r1(kp))
         }
         SignatureScheme::BLS12381
         | SignatureScheme::MultiSig
-        | SignatureScheme::ZkLoginAuthenticator => Err(anyhow!(format!(
+        | SignatureScheme::ZkLoginAuthenticator => Err(anyhow!(
             "key derivation not supported {:?}",
             key_scheme
-        ))),
+        )),
     }
 }
 
-/// Generate a new keypair with optional derivation path and optional mnemonic word lengths for phrase
+/// Generate a new keypair with optional derivation path and optional mnemonic word length
 fn new_keypair(
     scheme: u8,
     derivation_path: Option<String>,
     word_length: Option<String>,
 ) -> Result<(String, SuiKeyPair)> {
-    let scheme = SignatureScheme::from_flag_byte(&scheme).unwrap();
+    let scheme = SignatureScheme::from_flag_byte(&scheme)?;
     let dvpath = match derivation_path {
-        Some(s) => Some(DerivationPath::from_str(&s).unwrap()),
+        Some(s) => Some(DerivationPath::from_str(&s).map_err(|e| anyhow!("{}", e))?),
         None => None,
     };
-    let mnemonic = Mnemonic::new(parse_word_length(word_length).unwrap(), Language::English);
+    let mnemonic = Mnemonic::new(parse_word_length(word_length)?, Language::English);
     let seed = Seed::new(&mnemonic, "");
     match derive_key_pair_from_path(seed.as_bytes(), dvpath, &scheme) {
         Ok(kp) => Ok((mnemonic.phrase().to_string(), kp)),
@@ -395,9 +352,8 @@ fn new_keypair(
 
 /// Generate a new keypair with derivation path and mnemonic phrase
 fn recover_keypair(scheme: u8, derivation_path: String, phrase: String) -> Result<SuiKeyPair> {
-    let scheme = SignatureScheme::from_flag_byte(&scheme).unwrap();
-    let dvpath = Some(DerivationPath::from_str(&derivation_path).unwrap());
-    // let mnemonic = Mnemonic::from_phrase(&phrase, Language::English);
+    let scheme = SignatureScheme::from_flag_byte(&scheme)?;
+    let dvpath = Some(DerivationPath::from_str(&derivation_path).map_err(|e| anyhow!("{}", e))?);
     match Mnemonic::from_phrase(&phrase, Language::English) {
         Ok(mnemonic) => {
             let seed = Seed::new(&mnemonic, "");
@@ -406,9 +362,10 @@ fn recover_keypair(scheme: u8, derivation_path: String, phrase: String) -> Resul
                 Err(e) => Err(anyhow!("Failed to recover keypair: {:?}", e)),
             }
         }
-        Err(e) => Err(anyhow!("Recovery phrash failed: {:?}", e)),
+        Err(e) => Err(anyhow!("Recovery phrase failed: {:?}", e)),
     }
 }
+
 /// Find the word length for the mnemonic phrase
 fn parse_word_length(s: Option<String>) -> Result<MnemonicType, anyhow::Error> {
     match s {
@@ -424,47 +381,54 @@ fn parse_word_length(s: Option<String>) -> Result<MnemonicType, anyhow::Error> {
     }
 }
 
-/// Returns a keystrings scheme, public and private key bytes and a token from a Sui keystring.
-/// Assumes that the inbound keystring is valid (e.g. `flag | private_key bytes`)
-#[pyfunction]
-pub fn keys_from_keystring(in_str: String) -> (u8, Vec<u8>, Vec<u8>) {
-    assert!(in_str.len() != 0, "Requires valid keystring");
-    let (scheme, kp) = keypair_from_keystring(in_str).unwrap();
-    (scheme.flag(), kp.pubkey().as_bytes(), kp.as_bytes())
+fn py_err(e: impl std::fmt::Display) -> PyErr {
+    PyErr::new::<PyValueError, _>(e.to_string())
 }
 
-/// Returns a new keystring mnemonic phrase, public and private key bytes.
+/// Returns a keystring's scheme, public and private key bytes from a Sui keystring.
+#[pyfunction]
+pub fn keys_from_keystring(in_str: String) -> PyResult<(u8, Vec<u8>, Vec<u8>)> {
+    if in_str.is_empty() {
+        return Err(py_err("Requires valid keystring"));
+    }
+    let (scheme, kp) = keypair_from_keystring(in_str).map_err(py_err)?;
+    Ok((scheme.flag(), kp.pubkey().as_bytes(), kp.as_bytes()))
+}
+
+/// Returns a new mnemonic phrase, public and private key bytes.
 #[pyfunction]
 #[pyo3(signature = (in_scheme, derv_path=None, word_count=None))]
 pub fn generate_new_keypair(
     in_scheme: u8,
     derv_path: Option<String>,
     word_count: Option<String>,
-) -> (String, Vec<u8>, Vec<u8>) {
-    let (phrase, kp) = new_keypair(in_scheme, derv_path, word_count).unwrap();
-    (phrase, kp.pubkey().as_bytes(), kp.as_bytes())
+) -> PyResult<(String, Vec<u8>, Vec<u8>)> {
+    let (phrase, kp) = new_keypair(in_scheme, derv_path, word_count).map_err(py_err)?;
+    Ok((phrase, kp.pubkey().as_bytes(), kp.as_bytes()))
 }
 
-/// Returns a mnemonic phrase of word_count words
+/// Returns a mnemonic phrase of word_count words.
 #[pyfunction]
 #[pyo3(signature = (work_count=None))]
-pub fn generate_mnemonic_phrase(work_count: Option<String>) -> String {
-    let mnemonic = Mnemonic::new(parse_word_length(work_count).unwrap(), Language::English);
-    mnemonic.phrase().to_string()
+pub fn generate_mnemonic_phrase(work_count: Option<String>) -> PyResult<String> {
+    let mnemonic = Mnemonic::new(parse_word_length(work_count).map_err(py_err)?, Language::English);
+    Ok(mnemonic.phrase().to_string())
 }
-/// Returns keystrings scheme, public and private key bytes from mnemonic phrase and derivation path
+
+/// Returns public and private key bytes from mnemonic phrase and derivation path.
 #[pyfunction]
 pub fn keys_from_mnemonics(
     scheme: u8,
     derivation_path: String,
     phrase: String,
-) -> (Vec<u8>, Vec<u8>) {
-    let kp = recover_keypair(scheme, derivation_path, phrase).unwrap();
-    (kp.pubkey().as_bytes(), kp.as_bytes())
+) -> PyResult<(Vec<u8>, Vec<u8>)> {
+    let kp = recover_keypair(scheme, derivation_path, phrase).map_err(py_err)?;
+    Ok((kp.pubkey().as_bytes(), kp.as_bytes()))
 }
 
-/// Signs a Sui transaction message with optional intent, otherwise default is used
-/// The in_data string is the tx_bytes string
+/// Signs a Sui transaction message with optional intent (default [0,0,0]).
+/// Output byte layout: scheme_flag (1) | signature_bytes | public_key_bytes.
+/// Per-scheme raw signature length: ED25519=64, Secp256k1=64, Secp256r1=64.
 #[pyfunction]
 #[pyo3(signature = (in_scheme, prv_bytes, in_data, intent=None))]
 pub fn sign_digest(
@@ -472,100 +436,96 @@ pub fn sign_digest(
     prv_bytes: Vec<u8>,
     in_data: String,
     intent: Option<Vec<u8>>,
-) -> Vec<u8> {
+) -> PyResult<Vec<u8>> {
     let kp = kp_from_bytes(
-        SignatureScheme::from_flag_byte(&in_scheme).unwrap(),
+        SignatureScheme::from_flag_byte(&in_scheme).map_err(py_err)?,
         &prv_bytes,
     )
-    .unwrap();
-    let intent_msg = match intent {
-        Some(inv) => inv,
-        None => vec![0, 0, 0],
-    };
+    .map_err(py_err)?;
+    let intent_msg = intent.unwrap_or_else(|| vec![0, 0, 0]);
     let mut hasher = DefaultHash::default();
     hasher.update(intent_msg);
-    hasher.update(Base64::decode(&in_data).unwrap());
+    hasher.update(Base64::decode(&in_data).map_err(py_err)?);
     let digest = hasher.finalize().digest;
-    let mut sig = Base64::decode(&kp.sign(&digest)).unwrap();
+    let mut sig = kp.sign(&digest);
     sig.insert(0, kp.scheme().flag());
     sig.extend(kp.pubkey().as_bytes());
-    sig
+    Ok(sig)
 }
 
-/// Signs arbitrary data (base64 string)
+/// Signs arbitrary base64 data. Returns a base64 signature string.
 #[pyfunction]
-pub fn sign_message(in_scheme: u8, prv_bytes: Vec<u8>, in_data: String) -> String {
+pub fn sign_message(in_scheme: u8, prv_bytes: Vec<u8>, in_data: String) -> PyResult<String> {
     let kp = kp_from_bytes(
-        SignatureScheme::from_flag_byte(&in_scheme).unwrap(),
+        SignatureScheme::from_flag_byte(&in_scheme).map_err(py_err)?,
         &prv_bytes,
     )
-    .unwrap();
-    let msg = Base64::decode(&in_data).unwrap();
-    let sig = kp.sign(&msg);
-    sig
+    .map_err(py_err)?;
+    let msg = Base64::decode(&in_data).map_err(py_err)?;
+    Ok(Base64::encode(&kp.sign(&msg)))
 }
 
-/// Verify signature (base64 string) is valid for data (base64 string) using private key
+/// Verify signature (base64 string) is valid for data (base64 string) using private key.
 #[pyfunction]
-pub fn verify(in_scheme: u8, prv_bytes: Vec<u8>, in_data: String, sig: String) -> bool {
+pub fn verify(in_scheme: u8, prv_bytes: Vec<u8>, in_data: String, sig: String) -> PyResult<bool> {
     let kp = kp_from_bytes(
-        SignatureScheme::from_flag_byte(&in_scheme).unwrap(),
+        SignatureScheme::from_flag_byte(&in_scheme).map_err(py_err)?,
         &prv_bytes,
     )
-    .unwrap();
-    match kp.verify_signature(
-        &Base64::decode(&in_data).unwrap(),
-        &Base64::decode(&sig).unwrap(),
-    ) {
-        Ok(_) => true,
-        Err(_) => false,
-    }
+    .map_err(py_err)?;
+    let data = Base64::decode(&in_data).map_err(py_err)?;
+    let sig_bytes = Base64::decode(&sig).map_err(py_err)?;
+    Ok(kp.verify_signature(&data, &sig_bytes).is_ok())
 }
 
-/// Verify signature (base64 string) is valid for data (base64 string) using public key
+/// Verify signature (base64 string) is valid for data (base64 string) using public key.
+/// sig must be raw signature bytes (base64-encoded), not the full sign_digest output.
 #[pyfunction]
-pub fn verify_pubk(in_scheme: u8, pub_bytes: Vec<u8>, in_data: String, sig: String) -> bool {
-    let scheme = SignatureScheme::from_flag_byte(&in_scheme).unwrap();
+pub fn verify_pubk(
+    in_scheme: u8,
+    pub_bytes: Vec<u8>,
+    in_data: String,
+    sig: String,
+) -> PyResult<bool> {
+    let scheme = SignatureScheme::from_flag_byte(&in_scheme).map_err(py_err)?;
+    let data = Base64::decode(&in_data).map_err(py_err)?;
+    let sig_bytes = Base64::decode(&sig).map_err(py_err)?;
     let result = match scheme {
         SignatureScheme::ED25519 => {
-            let sui_pub = Ed25519PublicKey::from_bytes(&pub_bytes).unwrap();
-            let siggy = Ed25519Signature::from_bytes(&Base64::decode(&sig).unwrap()).unwrap();
-            sui_pub.verify(&Base64::decode(&in_data).unwrap(), &siggy)
+            let sui_pub = Ed25519PublicKey::from_bytes(&pub_bytes).map_err(py_err)?;
+            let siggy = Ed25519Signature::from_bytes(&sig_bytes).map_err(py_err)?;
+            sui_pub.verify(&data, &siggy)
         }
         SignatureScheme::Secp256k1 => {
-            let sui_pub = Secp256k1PublicKey::from_bytes(&pub_bytes).unwrap();
-
-            let siggy = Secp256k1Signature::from_bytes(&Base64::decode(&sig).unwrap()).unwrap();
-            sui_pub.verify(&Base64::decode(&in_data).unwrap(), &siggy)
+            let sui_pub = Secp256k1PublicKey::from_bytes(&pub_bytes).map_err(py_err)?;
+            let siggy = Secp256k1Signature::from_bytes(&sig_bytes).map_err(py_err)?;
+            sui_pub.verify(&data, &siggy)
         }
         SignatureScheme::Secp256r1 => {
-            let sui_pub = Secp256r1PublicKey::from_bytes(&pub_bytes).unwrap();
-            let siggy = Secp256r1Signature::from_bytes(&Base64::decode(&sig).unwrap()).unwrap();
-            sui_pub.verify(&Base64::decode(&in_data).unwrap(), &siggy)
+            let sui_pub = Secp256r1PublicKey::from_bytes(&pub_bytes).map_err(py_err)?;
+            let siggy = Secp256r1Signature::from_bytes(&sig_bytes).map_err(py_err)?;
+            sui_pub.verify(&data, &siggy)
         }
-        SignatureScheme::BLS12381 => todo!(),
-        SignatureScheme::MultiSig => todo!(),
-        SignatureScheme::ZkLoginAuthenticator => todo!(),
+        _ => return Err(py_err("scheme not supported")),
     };
-
-    match result {
-        Ok(_) => true,
-        Err(_) => false,
-    }
+    Ok(result.is_ok())
 }
 
-/// Decode a bech32 signature to a Sui key set (sig, pub, prv)
+/// Decode a bech32 key string to a Sui key set (scheme_flag, pub_bytes, prv_bytes).
+/// Returns (255, [], []) on any failure.
 #[pyfunction]
 pub fn decode_bech32(key_string: String, hrp: String) -> (u8, Vec<u8>, Vec<u8>) {
     let kbytes = match Bech32::decode(&key_string, &hrp) {
         Ok(v) => v,
-        Err(_e) => return (255, [].into(), [].into()),
+        Err(_) => return (255, vec![], vec![]),
     };
-    // let in_str = Base64::encode(kbytes);
-    keys_from_keystring(Base64::encode(kbytes))
+    match keypair_from_keystring(Base64::encode(kbytes)) {
+        Ok((scheme, kp)) => (scheme.flag(), kp.pubkey().as_bytes(), kp.as_bytes()),
+        Err(_) => (255, vec![], vec![]),
+    }
 }
 
-/// Enchode a key from 'sig_scheme | prv_bytes' to bech32
+/// Encode a key (scheme_flag | prv_bytes) to bech32.
 #[pyfunction]
 pub fn encode_bech32(prv_bytes: Vec<u8>, hrp: String) -> String {
     match Bech32::encode(prv_bytes, &hrp) {
@@ -573,8 +533,8 @@ pub fn encode_bech32(prv_bytes: Vec<u8>, hrp: String) -> String {
         Err(_) => String::new(),
     }
 }
-/// The pysui_fastcrypto module implemented in Rust.  In order
-/// to import the function name must match the Cargo.toml name
+
+/// The pysui_fastcrypto module implemented in Rust.
 #[pymodule]
 fn pysui_fastcrypto(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(keys_from_keystring, m)?)?;
@@ -594,6 +554,8 @@ fn pysui_fastcrypto(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- Existing tests ---
 
     #[test]
     fn test_scheme_flag_round_trip() {
@@ -665,5 +627,61 @@ mod tests {
     #[test]
     fn test_validate_path_bls_unsupported() {
         assert!(validate_path(&SignatureScheme::BLS12381, None).is_err());
+    }
+
+    // --- New error-path tests ---
+
+    #[test]
+    fn test_keypair_from_keystring_empty() {
+        assert!(keypair_from_keystring(String::new()).is_err());
+    }
+
+    #[test]
+    fn test_keypair_from_keystring_invalid_base64() {
+        assert!(keypair_from_keystring("!!!not_base64!!!".to_string()).is_err());
+    }
+
+    #[test]
+    fn test_keypair_from_keystring_invalid_scheme() {
+        // base64 of [0xFF, 0x01, 0x02] — invalid scheme byte
+        let bad = Base64::encode(&[0xFF_u8, 0x01, 0x02]);
+        assert!(keypair_from_keystring(bad).is_err());
+    }
+
+    #[test]
+    fn test_kp_from_bytes_invalid_length() {
+        // 31 bytes — wrong length for any scheme
+        let bad_seed = vec![0u8; 31];
+        assert!(kp_from_bytes(SignatureScheme::ED25519, &bad_seed).is_err());
+    }
+
+    #[test]
+    fn test_kp_from_bytes_unsupported_scheme() {
+        let seed = vec![0u8; 32];
+        assert!(kp_from_bytes(SignatureScheme::BLS12381, &seed).is_err());
+        assert!(kp_from_bytes(SignatureScheme::MultiSig, &seed).is_err());
+    }
+
+    #[test]
+    fn test_new_keypair_unsupported_scheme() {
+        // scheme byte 4 = BLS12381
+        assert!(new_keypair(4, None, None).is_err());
+    }
+
+    #[test]
+    fn test_recover_keypair_bad_phrase() {
+        assert!(recover_keypair(0, "m/44'/784'/0'/0'/0'".to_string(), "not a real phrase".to_string()).is_err());
+    }
+
+    #[test]
+    fn test_validate_path_secp256k1_invalid_purpose() {
+        let invalid_path = "m/44'/784'/0'/0/0".parse().unwrap();
+        assert!(validate_path(&SignatureScheme::Secp256k1, Some(invalid_path)).is_err());
+    }
+
+    #[test]
+    fn test_validate_path_secp256r1_invalid_purpose() {
+        let invalid_path = "m/44'/784'/0'/0/0".parse().unwrap();
+        assert!(validate_path(&SignatureScheme::Secp256r1, Some(invalid_path)).is_err());
     }
 }
