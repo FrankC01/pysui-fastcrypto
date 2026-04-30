@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Refactored GitHub Actions workflow: corrected action versions, restored macOS x86\_64 wheel (cross-compiled), and streamlined release job
+
 ### Changed
 
 ### Removed
