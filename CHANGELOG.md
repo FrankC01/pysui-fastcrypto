@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Updated transitive dependencies (keccak, time, tokio and others) to resolve known CVEs; rsa remains at 0.8.2 pending fastcrypto upstream resolution
+
 ### Removed
 
 ## [0.7.2] - 2026-04-08
