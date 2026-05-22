@@ -308,7 +308,7 @@ fn derive_key_pair_from_path(
             let child_xprv = XPrv::derive_from_path(seed, &derivation_path)
                 .map_err(|e| anyhow!("KeyGen error {:?}", e.to_string()))?;
             let kp = Secp256k1KeyPair::from(
-                Secp256k1PrivateKey::from_bytes(child_xprv.private_key().to_bytes().as_slice())
+                Secp256k1PrivateKey::from_bytes(child_xprv.private_key().to_bytes().as_ref())
                     .map_err(|e| anyhow!("KeyGen error {:?}", e.to_string()))?,
             );
             Ok(SuiKeyPair::Secp256k1(kp))
@@ -317,7 +317,7 @@ fn derive_key_pair_from_path(
             let child_xprv = XPrv::derive_from_path(seed, &derivation_path)
                 .map_err(|e| anyhow!("KeyGen error {:?}", e.to_string()))?;
             let kp = Secp256r1KeyPair::from(
-                Secp256r1PrivateKey::from_bytes(child_xprv.private_key().to_bytes().as_slice())
+                Secp256r1PrivateKey::from_bytes(child_xprv.private_key().to_bytes().as_ref())
                     .map_err(|e| anyhow!("KeyGen error {:?}", e.to_string()))?,
             );
             Ok(SuiKeyPair::Secp256r1(kp))

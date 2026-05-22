@@ -5,17 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.7.3] - Unpublished
+## [0.7.3] - 2026-05-22
 
 ### Added
 
 ### Fixed
 
 - Refactored GitHub Actions workflow: corrected action versions, restored macOS x86\_64 wheel (cross-compiled), and streamlined release job
+- Resolved `GenericArray::as_slice()` deprecation warnings in `derive_key_pair_from_path` (Secp256k1 and Secp256r1 paths)
 
 ### Changed
 
-- Updated transitive dependencies (keccak, time, tokio and others) to resolve known CVEs; rsa remains at 0.8.2 pending fastcrypto upstream resolution
+- Updated transitive dependencies (keccak, time, tokio and others) to resolve known CVEs
+- Bumped `fastcrypto` (0.1.9 → 0.1.10); transitively resolves rsa CVE-2026-21895 (rsa 0.8.2 → 0.9.10)
+- Bumped `maturin` (1.13.1 → 1.13.3) in requirements.txt
 
 ### Removed
 
