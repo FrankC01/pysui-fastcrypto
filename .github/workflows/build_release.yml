@@ -45,7 +45,7 @@ jobs:
     strategy:
       matrix:
         platform:
-          - runner: windows-latest
+          - runner: windows-2025
             target: x64
     steps:
       - uses: actions/checkout@v6
@@ -66,7 +66,7 @@ jobs:
           path: dist
 
   macos:
-    runs-on: macos-latest
+    runs-on: macos-15
     strategy:
       matrix:
         platform:
