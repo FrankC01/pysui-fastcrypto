@@ -1,6 +1,6 @@
 [package]
 name = "pysui-fastcrypto"
-version = "0.7.3"
+version = "0.7.4"
 license = "Apache-2.0"
 edition = "2021"
 
@@ -19,6 +19,6 @@ slip10_ed25519 = "0.1.3"
 tiny-bip39 = "2.0.0"
 
 [dependencies.pyo3]
-version = "0.28.3"
+version = "0.29.0"
 # "abi3-py37" tells pyo3 (and maturin) to build using the stable ABI with minimum Python version 3.10
 features = ["abi3-py310"]
