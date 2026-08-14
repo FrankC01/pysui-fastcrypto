@@ -5,7 +5,7 @@
 //!
 //! Files in this module mirror the upstream module layout so that drift
 //! against walrus-core can be diffed file by file. They contain NO PyO3
-//! annotations. See `NOTICE` and `.claude/walrus-port-manifest.md`.
+//! annotations. See `NOTICE` and `scratch/vendor-drift/walrus-port-manifest.md`.
 
 pub mod bft;
 pub mod core;

@@ -13,3 +13,6 @@
 pub mod bls;
 pub mod ffi;
 pub mod vendored;
+
+#[cfg(test)]
+mod correctness;

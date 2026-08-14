@@ -1,0 +1,802 @@
+=== /Users/fastfrank/mysten_repos/walrus/crates/walrus-core/src/lib.rs
+  mod          bft                                                          61
+  mod          by_axis                                                      62
+  mod          encoding                                                     63
+  mod          inconsistency                                                64
+  mod          keys                                                         65
+  mod          merkle                                                       66
+  mod          messages                                                     67
+  mod          metadata                                                     68
+  mod          utils                                                        69
+  type         PublicKey                                                    71-72
+  type         NetworkPublicKey                                             73-74
+  type         Signature                                                    75-76
+  type         Certificate                                                  77-78
+  type         DefaultHashFunction                                          79-80
+  type         Epoch                                                        81-82
+  type         EpochCount                                                   83-84
+  const        SUPPORTED_AND_DEFAULT_ENCODING                               86-88
+  const        SUPPORTED_ENCODING_TYPES                                     90-91
+  const        DEFAULT_ENCODING                                             93-94
+  struct       EpochSchema                                                  98-100
+  mod          test_utils                                                   102-103
+  struct       BlobId                                                       107-116
+  impl         impl BlobId                                                  118-177
+  const        BlobId::LENGTH                                               119-120
+  const        BlobId::ZERO                                                 122-123
+  const        BlobId::MAX                                                  125-126
+  fn           BlobId::from_metadata                                        128-132
+  fn           BlobId::from_sliver_pair_metadata                            134-145
+  fn           BlobId::first_two_bytes                                      147-157
+  fn           BlobId::new_with_hash_function                               159-165
+  impl         impl AsRef<[u8]> for BlobId                                  179-183
+  fn           BlobId::as_ref                                               180-182
+  impl         impl Display for BlobId                                      185-189
+  fn           BlobId::fmt                                                  186-188
+  impl         impl Debug for BlobId                                        191-195
+  fn           BlobId::fmt                                                  192-194
+  struct       QuiltPatchId                                                 197-208
+  impl         impl QuiltPatchId                                            210-254
+  fn           QuiltPatchId::new                                            211-217
+  fn           QuiltPatchId::to_bytes                                       219-225
+  fn           QuiltPatchId::from_bytes                                     227-235
+  fn           QuiltPatchId::zero                                           237-243
+  fn           QuiltPatchId::version_enum                                   245-253
+  impl         impl Display for QuiltPatchId                                256-260
+  fn           QuiltPatchId::fmt                                            257-259
+  impl         impl Debug for QuiltPatchId                                  262-270
+  fn           QuiltPatchId::fmt                                            263-269
+  impl         impl FromStr for QuiltPatchId                                272-295
+  type         QuiltPatchId::Err                                            273
+  fn           QuiltPatchId::from_str                                       275-294
+  struct       BlobIdParseError                                             297-300
+  impl         impl TryFrom<&[u8]> for BlobId                               302-309
+  type         BlobId::Error                                                303
+  fn           BlobId::try_from                                             305-308
+  impl         impl FromStr for BlobId                                      311-322
+  type         BlobId::Err                                                  312
+  fn           BlobId::from_str                                             314-321
+  struct       SuiObjectId                                                  326-333
+  impl         impl SuiObjectId                                             335-338
+  const        SuiObjectId::LENGTH                                          336-337
+  impl         impl From<ObjectID> for SuiObjectId                          340-345
+  fn           SuiObjectId::from                                            342-344
+  impl         impl From<&ObjectID> for SuiObjectId                         347-352
+  fn           SuiObjectId::from                                            349-351
+  impl         impl From<SuiObjectId> for ObjectID                          354-359
+  fn           ObjectID::from                                               356-358
+  impl         impl From<&SuiObjectId> for ObjectID                         361-366
+  fn           ObjectID::from                                               363-365
+  struct       SuiObjectIdParseError                                        368-371
+  impl         impl TryFrom<&[u8]> for SuiObjectId                          373-380
+  type         SuiObjectId::Error                                           374
+  fn           SuiObjectId::try_from                                        376-379
+  macro_rules! index_type                                                   384-422
+  struct       <anon>                                                       397-413
+  fn           as_usize                                                     399-402
+  fn           as_u32                                                       404-407
+  fn           as_u64                                                       409-412
+  impl         impl fmt::Display for $name                                  416-420
+  fn           fmt::fmt                                                     417-419
+  impl         impl From<SliverIndex> for SliverPairIndex                   441-445
+  fn           SliverPairIndex::from                                        442-444
+  impl         impl From<SliverPairIndex> for SliverIndex                   447-451
+  fn           SliverIndex::from                                            448-450
+  impl         impl PartialOrd<NonZeroU16> for SliverIndex                  453-457
+  fn           SliverIndex::partial_cmp                                     454-456
+  impl         impl PartialEq<NonZeroU16> for SliverIndex                   459-463
+  fn           SliverIndex::eq                                              460-462
+  impl         impl FromStr for SliverIndex                                 465-471
+  type         SliverIndex::Err                                             466
+  fn           SliverIndex::from_str                                        468-470
+  impl         impl SliverPairIndex                                         473-492
+  fn           SliverPairIndex::to_sliver_index                             474-491
+  impl         impl SliverIndex                                             494-511
+  fn           SliverIndex::to_pair_index                                   495-510
+  type         ShardRange                                                   519-522
+  impl         impl ShardIndex                                              524-555
+  fn           ShardIndex::range                                            525-554
+  impl         impl From<ShardIndex> for usize                              557-561
+  fn           usize::from                                                  558-560
+  type         Sliver                                                       565-568
+  impl         impl Sliver                                                  570-612
+  fn           Sliver::hash                                                 571-575
+  fn           Sliver::len                                                  577-580
+  fn           Sliver::is_empty                                             582-585
+  fn           Sliver::verify                                               587-597
+  fn           Sliver::sliver_index                                         599-602
+  fn           Sliver::to_raw                                               604-611
+  type         DecodingSymbolType                                           617-618
+  type         SliverType                                                   620-621
+  struct       SymbolId                                                     625-630
+  impl         impl SymbolId                                                632-658
+  fn           SymbolId::new                                                633-636
+  fn           SymbolId::primary_sliver_index                               638-641
+  fn           SymbolId::secondary_sliver_index                             643-646
+  fn           SymbolId::sliver_index                                       648-657
+  impl         impl Display for SymbolId                                    660-664
+  fn           SymbolId::fmt                                                661-663
+  impl         impl utoipa::PartialSchema for SymbolId                      666-684
+  fn           SymbolId::schema                                             668-683
+  impl         impl utoipa::ToSchema for SymbolId                           686-691
+  fn           SymbolId::name                                               688-690
+  struct       ParseSymbolIdError                                           693-698
+  impl         impl FromStr for SymbolId                                    700-710
+  type         SymbolId::Err                                                701
+  fn           SymbolId::from_str                                           703-709
+  impl         impl Serialize for SymbolId                                  712-723
+  fn           SymbolId::serialize                                          713-722
+  impl         impl<'de> Deserialize<'de> for SymbolId                      725-737
+  fn           SymbolId::deserialize                                        726-736
+  type         RecoverySymbol                                               739-742
+  struct       InvalidEncodingType                                          753-756
+  enum         EncodingTypeForSerde                                         768-773
+  enum         EncodingType                                                 775-784
+  impl         impl TryFrom<EncodingTypeForSerde> for EncodingType          786-797
+  type         EncodingType::Error                                          788
+  fn           EncodingType::try_from                                       790-796
+  impl         impl From<EncodingType> for EncodingTypeForSerde             799-807
+  fn           EncodingTypeForSerde::from                                   801-806
+  impl         impl From<EncodingType> for u8                               809-814
+  fn           u8::from                                                     810-813
+  impl         impl TryFrom<u8> for EncodingType                            816-826
+  type         EncodingType::Error                                          817
+  fn           EncodingType::try_from                                       819-825
+  impl         impl FromStr for EncodingType                                828-838
+  type         EncodingType::Err                                            829
+  fn           EncodingType::from_str                                       831-837
+  impl         impl EncodingType                                            840-862
+  fn           EncodingType::required_alignment                             841-847
+  fn           EncodingType::max_symbol_size                                849-855
+  fn           EncodingType::is_supported                                   857-861
+  impl         impl Display for EncodingType                                864-871
+  fn           EncodingType::fmt                                            865-870
+  type         InconsistencyProof                                           875-881
+  impl         impl<T: MerkleAuth> InconsistencyProof<T>                    883-895
+  fn           InconsistencyProof::verify                                   884-894
+  macro_rules! ensure                                                       906-957
+  type         SliverId                                                     959-960
+  impl         impl SliverId                                                962-975
+  fn           SliverId::index                                              963-966
+  fn           SliverId::pair_index                                         968-974
+  mod          tests                                                        977-1015
+  fn           encoding_type_bcs_serialize                                  983-986
+  fn           encoding_type_bcs_deserialize                                988-994
+  fn           symbol_id_serde_compact                                      996-1008
+  fn           symbol_id_serde_human_readable                               1010-1014
+=== /Users/fastfrank/mysten_repos/walrus/crates/walrus-core/src/bft.rs
+  fn           max_n_faulty                                                 8-14
+  fn           min_n_correct                                                16-25
+  mod          tests                                                        27-59
+  fn           test_bft_computations                                        44-58
+=== /Users/fastfrank/mysten_repos/walrus/crates/walrus-core/src/merkle.rs
+  const        DIGEST_LEN                                                   15-16
+  const        LEAF_PREFIX                                                  18
+  const        INNER_PREFIX                                                 19
+  const        EMPTY_NODE                                                   20
+  enum         MerkleProofError                                             22-34
+  enum         Node                                                         36-43
+  impl         impl Node                                                    45-53
+  fn           Node::bytes                                                  46-52
+  impl         impl From<Digest<DIGEST_LEN>> for Node                       55-59
+  fn           Node::from                                                   56-58
+  impl         impl From<[u8; DIGEST_LEN]> for Node                         61-65
+  fn           From::from                                                   62-64
+  impl         impl AsRef<[u8]> for Node                                    67-74
+  fn           Node::as_ref                                                 68-73
+  trait        MerkleAuth                                                   76-102
+  fn           MerkleAuth::verify_proof                                     78-93
+  fn           MerkleAuth::check_path_length                                95-96
+  fn           MerkleAuth::compute_root                                     98-101
+  struct       MerkleProof                                                  104-110
+  impl         impl<T> MerkleProof<T>                                       112-123
+  fn           MerkleProof::new                                             116-122
+  impl         impl<T> Clone for MerkleProof<T>                             127-134
+  fn           MerkleProof::clone                                           128-133
+  impl         impl<T> core::fmt::Debug for MerkleProof<T>                  138-144
+  fn           MerkleProof::fmt                                             139-143
+  impl         impl<T> MerkleAuth for MerkleProof<T>                        146-178
+  fn           MerkleProof::compute_root                                    150-169
+  fn           MerkleProof::check_path_length                               171-177
+  impl         impl<T> PartialEq for MerkleProof<T>                         180-184
+  fn           MerkleProof::eq                                              181-183
+  impl         impl Eq for MerkleProof {}                                   186
+  struct       MerkleTree                                                   188-200
+  impl         impl<T> core::fmt::Debug for MerkleTree<T>                   202-209
+  fn           MerkleTree::fmt                                              203-208
+  impl         impl<T> MerkleTree<T>                                        211-310
+  fn           MerkleTree::build                                            215-223
+  fn           MerkleTree::build_from_leaf_hashes                           225-266
+  fn           MerkleTree::verify_root                                      268-271
+  fn           MerkleTree::root                                             273-276
+  fn           MerkleTree::get_proof                                        278-309
+  fn           leaf_hash                                                    312-321
+  fn           inner_hash                                                   323-332
+  fn           n_nodes                                                      334-343
+  fn           path_length                                                  345-351
+  mod          test                                                         353-466
+  const        TEST_INPUT                                                   359-361
+  fn           test_n_nodes                                                 363-375
+  fn           test_merkle_tree_empty                                       377-381
+  fn           test_merkle_tree_single_element                              383-391
+  fn           test_merkle_tree_empty_element                               393-400
+  fn           test_get_path_out_of_bounds                                  402-417
+  fn           test_merkle_path_verify                                      419-432
+  fn           test_merkle_path_verify_fails_for_wrong_index                434-447
+  fn           test_path_length                                             463-465
+=== /Users/fastfrank/mysten_repos/walrus/crates/walrus-core/src/utils.rs
+  macro_rules! wrapped_uint                                                 12-77
+  fn           new                                                          30-33
+  fn           get                                                          35-38
+  impl         impl From<$name> for $uint                                   43-47
+  fn           From::from                                                   44-46
+  impl         impl From<$uint> for $name                                   49-53
+  fn           From::from                                                   50-52
+  impl         impl From<&$uint> for $name                                  55-59
+  fn           From::from                                                   56-58
+  impl         impl TryFrom<usize> for $name                                61-67
+  type         TryFrom::Error                                               62
+  fn           TryFrom::try_from                                            64-66
+  impl         impl TryFrom<u32> for $name                                  69-75
+  type         TryFrom::Error                                               70
+  fn           TryFrom::try_from                                            72-74
+  fn           data_prefix_string                                           79-111
+=== /Users/fastfrank/mysten_repos/walrus/crates/walrus-core/src/metadata.rs
+  enum         VerificationError                                            43-61
+  struct       QuiltPatchV1                                                 63-78
+  impl         impl QuiltPatchApi<QuiltVersionV1> for QuiltPatchV1          80-98
+  fn           QuiltPatchV1::quilt_patch_internal_id                        81-83
+  fn           QuiltPatchV1::identifier                                     85-87
+  fn           QuiltPatchV1::has_matched_tag                                89-91
+  fn           QuiltPatchV1::sliver_indices                                 93-97
+  impl         impl QuiltPatchV1                                            100-133
+  fn           QuiltPatchV1::new                                            101-111
+  fn           QuiltPatchV1::new_with_tags                                  113-126
+  fn           QuiltPatchV1::set_range                                      128-132
+  enum         QuiltIndex                                                   135-141
+  impl         impl QuiltIndex                                              143-155
+  fn           QuiltIndex::get_sliver_indices_for_identifiers               144-154
+  struct       QuiltPatchInternalIdV1                                       157-164
+  impl         impl QuiltPatchInternalIdApi for QuiltPatchInternalIdV1      166-222
+  fn           QuiltPatchInternalIdV1::to_bytes                             177-187
+  fn           QuiltPatchInternalIdV1::from_bytes                           189-215
+  fn           QuiltPatchInternalIdV1::sliver_indices                       217-221
+  impl         impl QuiltPatchInternalIdV1                                  224-232
+  fn           QuiltPatchInternalIdV1::new                                  225-231
+  struct       QuiltIndexV1                                                 239-244
+  impl         impl QuiltIndexApi<QuiltVersionV1> for QuiltIndexV1          246-264
+  fn           QuiltIndexV1::patches                                        247-249
+  fn           QuiltIndexV1::identifiers                                    251-255
+  fn           QuiltIndexV1::len                                            257-259
+  fn           QuiltIndexV1::is_empty                                       261-263
+  impl         impl From<QuiltIndexV1> for QuiltIndex                       266-270
+  fn           QuiltIndex::from                                             267-269
+  impl         impl QuiltIndexV1                                            272-281
+  fn           QuiltIndexV1::populate_start_indices                         273-280
+  enum         QuiltMetadata                                                283-288
+  impl         impl QuiltMetadata                                           290-297
+  fn           QuiltMetadata::get_verified_metadata                         291-296
+  struct       QuiltMetadataV1                                              299-308
+  impl         impl QuiltMetadataV1                                         310-315
+  fn           QuiltMetadataV1::get_verified_metadata                       311-314
+  type         VerifiedBlobMetadataWithId                                   317-323
+  type         UnverifiedBlobMetadataWithId                                 325-328
+  struct       BlobMetadataWithId                                           330-340
+  impl         impl<const V: bool> BlobMetadataWithId<V>                    342-381
+  fn           BlobMetadataWithId::new                                      343-346
+  fn           BlobMetadataWithId::new_verified_from_metadata               348-361
+  fn           BlobMetadataWithId::new_verified_unchecked                   363-370
+  fn           BlobMetadataWithId::blob_id                                  372-375
+  fn           BlobMetadataWithId::metadata                                 377-380
+  impl         impl VerifiedBlobMetadataWithId                              383-417
+  fn           VerifiedBlobMetadataWithId::into_unverified                  384-390
+  fn           VerifiedBlobMetadataWithId::is_encoding_config_applicable    392-404
+  fn           VerifiedBlobMetadataWithId::n_shards                         406-416
+  impl         impl UnverifiedBlobMetadataWithId                            419-453
+  fn           UnverifiedBlobMetadataWithId::verify                         420-452
+  impl         impl<const V: bool> AsRef<BlobMetadata> for BlobMetadataWithId<V> 455-459
+  fn           BlobMetadataWithId::as_ref                                   456-458
+  trait        BlobMetadataApi                                              461-491
+  fn           BlobMetadataApi::get_sliver_hash                             464-469
+  fn           BlobMetadataApi::compute_root_hash                           471-472
+  fn           BlobMetadataApi::symbol_size                                 474-478
+  fn           BlobMetadataApi::encoded_size                                480-481
+  fn           BlobMetadataApi::encoding_type                               483-484
+  fn           BlobMetadataApi::unencoded_length                            486-487
+  fn           BlobMetadataApi::hashes                                      489-490
+  enum         BlobMetadata                                                 493-499
+  impl         impl BlobMetadata                                            501-532
+  fn           BlobMetadata::new                                            502-514
+  fn           BlobMetadata::encoding_type                                  516-521
+  fn           BlobMetadata::mut_inner                                      523-531
+  struct       BlobMetadataV1                                               534-543
+  impl         impl Debug for BlobMetadataV1                                545-553
+  fn           BlobMetadataV1::fmt                                          546-552
+  impl         impl BlobMetadataApi for BlobMetadataV1                      555-615
+  fn           BlobMetadataV1::get_sliver_hash                              556-568
+  fn           BlobMetadataV1::compute_root_hash                            570-578
+  fn           BlobMetadataV1::symbol_size                                  580-588
+  fn           BlobMetadataV1::encoded_size                                 590-602
+  fn           BlobMetadataV1::encoding_type                                604-606
+  fn           BlobMetadataV1::unencoded_length                             608-610
+  fn           BlobMetadataV1::hashes                                       612-614
+  struct       SliverPairMetadata                                           617-624
+  impl         impl SliverPairMetadata                                      626-653
+  fn           SliverPairMetadata::new_empty                                627-633
+  fn           SliverPairMetadata::pair_leaf_input                          635-643
+  fn           SliverPairMetadata::hash                                     645-652
+  mod          tests                                                        655-777
+  const        BLOB_ID                                                      659
+  mod          verify                                                       661-776
+  fn           fails_for_incorrect_blob_id                                  665-680
+  fn           succeeds_for_correct_metadata                                682-688
+  fn           verified_metadata_has_the_same_data_as_unverified            690-700
+  fn           fails_for_hash_count_mismatch                                702-724
+  fn           fails_for_unencoded_length_too_large                         726-751
+  fn           deserializing_metadata_with_encoding_type_zero_fails         753-775
+  const        ENCODING_TYPE_OFFSET                                         762
+=== /Users/fastfrank/mysten_repos/walrus/crates/walrus-core/src/messages.rs
+  trait        <anon>                                                       15-16
+  mod          proof_of_possession                                          19
+  mod          storage_confirmation                                         22
+  mod          invalid_blob_id                                              30
+  mod          sync_shard                                                   33
+  mod          certificate                                                  36
+  struct       ProtocolMessage                                              46-53
+  impl         impl<T> ProtocolMessage<T>                                   55-65
+  fn           ProtocolMessage::epoch                                       56-59
+  fn           ProtocolMessage::contents                                    61-64
+  struct       SignedMessage                                                67-84
+  impl         impl<T> SignedMessage<T>                                     86-95
+  fn           SignedMessage::new_from_encoded                              87-94
+  impl         impl<T> SignedMessage<T>                                     97-144
+  fn           SignedMessage::verify_signature_and_get_message              98-111
+  fn           SignedMessage::verify_signature_and_contents                 113-143
+  struct       InvalidIntent                                                146-152
+  enum         MessageVerificationError                                     154-177
+  struct       IntentType                                                   183-200
+  const        PROOF_OF_POSSESSION_MSG                                      185-186
+  const        BLOB_CERT_MSG                                                187-188
+  const        INVALID_BLOB_ID_MSG                                          189-190
+  const        SYNC_SHARD_MSG                                               191-193
+  const        DENY_LIST_UPDATE_MSG                                         194-195
+  const        DENY_LIST_BLOB_DELETED_MSG                                   196-197
+  const        PROTOCOL_VERSION_MSG                                         198-199
+  struct       IntentVersion                                                204-209
+  const        DEFAULT                                                      207-208
+  struct       IntentAppId                                                  213-217
+  const        STORAGE                                                      215-216
+  struct       Intent                                                       220-229
+  impl         impl Intent                                                  231-240
+  fn           Intent::storage                                              232-239
+  mod          tests                                                        242-362
+  const        EPOCH                                                        254
+  const        BLOB_ID                                                      255
+  impl         impl AsMut<ProtocolMessage<StorageConfirmationBody>> for Confirmation 257-261
+  fn           Confirmation::as_mut                                         258-260
+  impl         impl AsMut<ProtocolMessage<BlobId>> for InvalidBlobIdMsg     263-267
+  fn           InvalidBlobIdMsg::as_mut                                     264-266
+  fn           decoding_fails_for_incorrect_message_type                    275-292
+  const        OTHER_MSG_TYPE                                               283
+  fn           decoding_fails_for_unsupported_intent_version                300-317
+  const        UNSUPPORTED_INTENT_VERSION                                   308
+  fn           decoding_fails_for_invalid_app_id                            325-342
+  const        INVALID_APP_ID                                               333
+  fn           decoding_succeeds_for_valid_message                          350-361
+=== /Users/fastfrank/mysten_repos/walrus/crates/walrus-core/src/encoding/common.rs
+  trait        EncodingAxis                                                 10-25
+  type         EncodingAxis::OrthogonalAxis                                 14-15
+  const        EncodingAxis::IS_PRIMARY                                     16-17
+  const        EncodingAxis::NAME                                           18-19
+  fn           EncodingAxis::sliver_type                                    21-24
+  struct       Primary                                                      27-29
+  impl         impl EncodingAxis for Primary                                30-34
+  type         Primary::OrthogonalAxis                                      31
+  const        Primary::IS_PRIMARY                                          32
+  const        Primary::NAME                                                33
+  struct       Secondary                                                    36-38
+  impl         impl EncodingAxis for Secondary                              39-43
+  type         Secondary::OrthogonalAxis                                    40
+  const        Secondary::IS_PRIMARY                                        41
+  const        Secondary::NAME                                              42
+  enum         ConsistencyCheckType                                         45-56
+  impl         impl fmt::Display for ConsistencyCheckType                   58-66
+  fn           ConsistencyCheckType::fmt                                    59-65
+=== /Users/fastfrank/mysten_repos/walrus/crates/walrus-core/src/encoding/errors.rs
+  struct       DataTooLargeError                                            10-13
+  enum         InvalidDataSizeError                                         15-24
+  impl         impl From<DataTooLargeError> for InvalidDataSizeError        26-30
+  fn           InvalidDataSizeError::from                                   27-29
+  enum         EncodeError                                                  32-44
+  enum         DecodeError                                                  46-66
+  impl         impl From<DataTooLargeError> for DecodeError                 68-72
+  fn           DecodeError::from                                            69-71
+  enum         RecoverySymbolError                                          74-83
+  impl         impl From<InvalidDataSizeError> for RecoverySymbolError      85-89
+  fn           RecoverySymbolError::from                                    86-88
+  enum         SliverRecoveryError                                          91-100
+  enum         SliverRecoveryOrVerificationError                            102-112
+  impl         impl From<DataTooLargeError> for SliverRecoveryOrVerificationError 114-118
+  fn           SliverRecoveryOrVerificationError::from                      115-117
+  struct       WrongSymbolSizeError                                         120-123
+  struct       WrongSliverVariantError                                      125-129
+  enum         SliverVerificationError                                      131-149
+  enum         SymbolVerificationError                                      151-170
+  enum         QuiltError                                                   172-242
+=== /Users/fastfrank/mysten_repos/walrus/crates/walrus-core/src/encoding/utils.rs
+  fn           compute_symbol_size                                          8-25
+  fn           compute_symbol_size_from_usize                               27-39
+  fn           source_symbols_per_blob                                      41-50
+  mod          tests                                                        52-90
+  fn           compute_symbol_size_matches_expectation                      74-89
+=== /Users/fastfrank/mysten_repos/walrus/crates/walrus-core/src/encoding/symbols.rs
+  struct       Symbols                                                      39-49
+  impl         impl Symbols                                                 51-251
+  fn           Symbols::new                                                 52-64
+  fn           Symbols::truncate                                            66-72
+  fn           Symbols::zeros                                               74-80
+  fn           Symbols::with_capacity                                       82-96
+  fn           Symbols::reserve                                             98-102
+  fn           Symbols::set_min_capacity                                    104-109
+  fn           Symbols::from_slice                                          111-119
+  fn           Symbols::len                                                 121-125
+  fn           Symbols::is_empty                                            127-131
+  fn           Symbols::get                                                 133-144
+  fn           Symbols::get_mut                                             146-156
+  fn           Symbols::decoding_symbol_at                                  158-171
+  fn           Symbols::to_symbols                                          173-177
+  fn           Symbols::to_symbols_mut                                      179-184
+  fn           Symbols::to_decoding_symbols                                 186-199
+  fn           Symbols::extend                                              201-214
+  fn           Symbols::symbol_size                                         216-220
+  fn           Symbols::symbol_usize                                        222-226
+  fn           Symbols::data                                                228-232
+  fn           Symbols::data_mut                                            234-238
+  fn           Symbols::symbol_range                                        240-244
+  fn           Symbols::into_vec                                            246-250
+  impl         impl Index<usize> for Symbols                                253-259
+  type         Symbols::Output                                              254
+  fn           Symbols::index                                               256-258
+  impl         impl IndexMut<usize> for Symbols                             261-266
+  fn           Symbols::index_mut                                           262-265
+  impl         impl Index<Range<usize>> for Symbols                         268-274
+  type         Symbols::Output                                              269
+  fn           Symbols::index                                               271-273
+  impl         impl IndexMut<Range<usize>> for Symbols                      276-281
+  fn           Symbols::index_mut                                           277-280
+  impl         impl AsRef<[u8]> for Symbols                                 283-287
+  fn           Symbols::as_ref                                              284-286
+  impl         impl AsMut<[u8]> for Symbols                                 289-293
+  fn           Symbols::as_mut                                              290-292
+  struct       DecodingSymbol                                               295-312
+  impl         impl<T: EncodingAxis> DecodingSymbol<T>                      314-324
+  fn           DecodingSymbol::len                                          315-318
+  fn           DecodingSymbol::is_empty                                     320-323
+  impl         impl<T: EncodingAxis> DecodingSymbol<T>                      326-346
+  fn           DecodingSymbol::new                                          327-334
+  fn           DecodingSymbol::with_proof                                   336-345
+  impl         impl<T: EncodingAxis> Display for DecodingSymbol<T>          348-358
+  fn           DecodingSymbol::fmt                                          349-357
+  type         EitherDecodingSymbol                                         360-361
+  impl         impl EitherDecodingSymbol                                    363-402
+  fn           EitherDecodingSymbol::source_type                            364-370
+  fn           EitherDecodingSymbol::source_index                           372-377
+  fn           EitherDecodingSymbol::index                                  379-385
+  fn           EitherDecodingSymbol::data                                   387-393
+  fn           EitherDecodingSymbol::len                                    395-401
+  struct       GeneralRecoverySymbol                                        407-418
+  impl         impl<U> GeneralRecoverySymbol<U>                             420-442
+  fn           GeneralRecoverySymbol::id                                    421-433
+  fn           GeneralRecoverySymbol::proof_axis                            435-441
+  impl         impl GeneralRecoverySymbol                                   444-460
+  fn           GeneralRecoverySymbol::from_recovery_symbol                  445-459
+  impl         impl<U: MerkleAuth> GeneralRecoverySymbol<U>                 462-530
+  fn           GeneralRecoverySymbol::verify                                463-513
+  fn           GeneralRecoverySymbol::get_expected_root                     515-529
+  impl         impl<U> From<GeneralRecoverySymbol<U>> for DecodingSymbol<Primary> 532-541
+  fn           DecodingSymbol::from                                         533-540
+  impl         impl<U> From<GeneralRecoverySymbol<U>> for DecodingSymbol<Secondary> 543-552
+  fn           DecodingSymbol::from                                         544-551
+  impl         impl<U: MerkleAuth> From<GeneralRecoverySymbol<U>> for EitherRecoverySymbol<U> 554-571
+  fn           EitherRecoverySymbol::from                                   555-570
+  struct       RecoverySymbol                                               573-592
+  type         PrimaryRecoverySymbol                                        594-595
+  type         SecondaryRecoverySymbol                                      597-598
+  impl         impl<T: EncodingAxis, U: MerkleAuth> RecoverySymbol<T, U>    600-651
+  fn           RecoverySymbol::verify_proof                                 601-611
+  fn           RecoverySymbol::verify                                       613-644
+  fn           RecoverySymbol::into_decoding_symbol                         646-650
+  impl         impl<T: EncodingAxis, U: MerkleAuth> Display for RecoverySymbol<T, U> 653-664
+  fn           RecoverySymbol::fmt                                          654-663
+  struct       RecoverySymbolPair                                           666-674
+  mod          tests                                                        676-760
+  fn           get_correct_symbol                                           702-707
+  fn           test_wrong_symbol_size                                       709-713
+  fn           correct_symbols_from_slice                                   725-730
+  fn           correct_symbols_new_empty                                    740-748
+  fn           correct_display_for_decoding_symbol                          774-782
+  fn           test_recovery_symbol_proof                                   791-828
+=== /Users/fastfrank/mysten_repos/walrus/crates/walrus-core/src/encoding/config.rs
+  const        MAX_SOURCE_SYMBOLS                                           37-39
+  trait        EncodingFactory                                              41-336
+  fn           EncodingFactory::encoding_type                               44-45
+  fn           EncodingFactory::max_symbol_size                             47-50
+  fn           EncodingFactory::encode_all_symbols                          52-53
+  fn           EncodingFactory::encode_all_repair_symbols                   55-59
+  fn           EncodingFactory::encode_symbol                               61-68
+  fn           EncodingFactory::decode_from_decoding_symbols                70-82
+  fn           EncodingFactory::encode_with_metadata                        84-99
+  fn           EncodingFactory::compute_metadata                            101-105
+  fn           EncodingFactory::compute_blob_id                             107-110
+  fn           EncodingFactory::decode                                      112-125
+  fn           EncodingFactory::decode_and_verify                           127-156
+  fn           EncodingFactory::strict_consistency_check                    158-172
+  fn           EncodingFactory::n_primary_source_symbols                    174-175
+  fn           EncodingFactory::n_secondary_source_symbols                  177-178
+  fn           EncodingFactory::n_shards                                    180-181
+  fn           EncodingFactory::n_source_symbols                            183-191
+  fn           EncodingFactory::n_systematic_slivers                        193-198
+  fn           EncodingFactory::n_symbols_for_recovery                      200-204
+  fn           EncodingFactory::n_slivers_for_reconstruction                206-210
+  fn           EncodingFactory::n_shards_as_usize                           212-216
+  fn           EncodingFactory::max_data_size                               218-222
+  fn           EncodingFactory::max_blob_size                               224-230
+  fn           EncodingFactory::source_symbols_per_blob                     232-239
+  fn           EncodingFactory::symbol_size_for_blob                        241-254
+  fn           EncodingFactory::symbol_size_for_blob_from_nonzero           256-272
+  fn           EncodingFactory::symbol_size_for_blob_from_usize             274-290
+  fn           EncodingFactory::sliver_size_for_blob                        292-303
+  fn           EncodingFactory::encoded_blob_length                         305-311
+  fn           EncodingFactory::encoded_blob_length_from_usize              313-319
+  fn           EncodingFactory::metadata_length                             321-327
+  fn           EncodingFactory::max_sliver_size                             329-335
+  enum         RequiredCount                                                346-350
+  struct       EncodingConfig                                               352-359
+  impl         impl EncodingConfig                                          361-406
+  fn           EncodingConfig::new                                          362-376
+  fn           EncodingConfig::new_for_test                                 378-392
+  fn           EncodingConfig::get_for_type                                 394-400
+  fn           EncodingConfig::n_shards                                     402-405
+  enum         EncodingConfigEnum                                           408-414
+  struct       ReedSolomonEncodingConfig                                    416-432
+  impl         impl ReedSolomonEncodingConfig                               434-568
+  const        ReedSolomonEncodingConfig::ENCODING_TYPE                     435
+  fn           ReedSolomonEncodingConfig::new                               437-460
+  fn           ReedSolomonEncodingConfig::new_from_nonzero_parameters       462-504
+  fn           ReedSolomonEncodingConfig::new_for_test                      506-523
+  fn           ReedSolomonEncodingConfig::get_encoder                       525-534
+  fn           ReedSolomonEncodingConfig::get_decoder                       536-541
+  fn           ReedSolomonEncodingConfig::get_blob_encoder                  543-550
+  fn           ReedSolomonEncodingConfig::get_blob_encoder_owned            552-559
+  fn           ReedSolomonEncodingConfig::get_blob_decoder                  561-567
+  impl         impl EncodingFactory for ReedSolomonEncodingConfig           570-708
+  fn           ReedSolomonEncodingConfig::n_primary_source_symbols          571-574
+  fn           ReedSolomonEncodingConfig::n_secondary_source_symbols        576-579
+  fn           ReedSolomonEncodingConfig::n_shards                          581-584
+  fn           ReedSolomonEncodingConfig::encoding_type                     586-589
+  fn           ReedSolomonEncodingConfig::encode_with_metadata              591-596
+  fn           ReedSolomonEncodingConfig::compute_metadata                  598-603
+  fn           ReedSolomonEncodingConfig::decode                            605-611
+  fn           ReedSolomonEncodingConfig::decode_and_verify                 613-658
+  fn           ReedSolomonEncodingConfig::encode_all_symbols                660-662
+  fn           ReedSolomonEncodingConfig::encode_all_repair_symbols         664-670
+  fn           ReedSolomonEncodingConfig::encode_symbol                     672-693
+  fn           ReedSolomonEncodingConfig::decode_from_decoding_symbols      695-707
+  fn           source_symbols_for_n_shards                                  710-725
+  fn           metadata_length_for_n_shards                                 727-740
+  fn           max_sliver_size_for_n_secondary                              742-749
+  fn           max_sliver_size_for_n_shards                                 751-758
+  fn           max_blob_size_for_n_shards                                   760-773
+  fn           source_symbols_per_blob_for_n_shards                         775-781
+  fn           encoded_blob_length_for_n_shards                             783-799
+  fn           encoded_slivers_length_for_n_shards                          801-826
+  mod          tests                                                        828-924
+  fn           test_sliver_size_for_blob                                    847-856
+  fn           test_encoded_size_reed_solomon                               874-882
+  fn           test_source_symbols_for_n_shards                             896-905
+  fn           test_new_for_n_shards                                        919-923
+=== /Users/fastfrank/mysten_repos/walrus/crates/walrus-core/src/encoding/basic_encoding.rs
+  const        BLOB_TYPE_ATTRIBUTE_KEY                                      23-24
+  const        QUILT_TYPE_VALUE                                             26-27
+  trait        Decoder                                                      29-67
+  type         Decoder::Config                                              31-32
+  fn           Decoder::new                                                 34-47
+  fn           Decoder::decode                                              49-66
+  struct       ReedSolomonEncoder                                           71-78
+  impl         impl fmt::Debug for ReedSolomonEncoder                       80-88
+  fn           ReedSolomonEncoder::fmt                                      81-87
+  impl         impl ReedSolomonEncoder                                      90-342
+  const        ReedSolomonEncoder::ASSOCIATED_ENCODING_TYPE                 91
+  fn           ReedSolomonEncoder::new                                      93-142
+  fn           ReedSolomonEncoder::check_parameters_and_compute_symbol_size 144-162
+  fn           ReedSolomonEncoder::symbol_size                              164-168
+  fn           ReedSolomonEncoder::n_source_symbols                         170-174
+  fn           ReedSolomonEncoder::encode_all_ref                           176-186
+  fn           ReedSolomonEncoder::encode_all                               188-211
+  fn           ReedSolomonEncoder::encode_all_repair_symbols                213-226
+  fn           ReedSolomonEncoder::encode_all_repair_symbols_inner          228-248
+  fn           ReedSolomonEncoder::take_or_create_encoded_symbols           250-259
+  fn           ReedSolomonEncoder::set_and_return_encoded_symbols           261-266
+  fn           ReedSolomonEncoder::get_symbol                               268-293
+  fn           ReedSolomonEncoder::check_data_length                        295-303
+  fn           ReedSolomonEncoder::encode                                   305-319
+  fn           ReedSolomonEncoder::reset                                    321-329
+  fn           ReedSolomonEncoder::reed_solomon_original_count              331-333
+  fn           ReedSolomonEncoder::reed_solomon_recovery_count              335-337
+  fn           ReedSolomonEncoder::reed_solomon_shard_bytes                 339-341
+  struct       ReedSolomonDecoder                                           344-352
+  impl         impl fmt::Debug for ReedSolomonDecoder                       354-361
+  fn           ReedSolomonDecoder::fmt                                      355-360
+  impl         impl Decoder for ReedSolomonDecoder                          363-430
+  type         ReedSolomonDecoder::Config                                   364
+  fn           ReedSolomonDecoder::new                                      366-385
+  fn           ReedSolomonDecoder::decode                                   387-429
+  mod          tests                                                        432-567
+  fn           encoding_misaligned_data_fails                               448-457
+  fn           encoding_incorrect_data_length_fails                         468-485
+  fn           test_encode_decode                                           500-533
+  fn           can_decode_in_multiple_steps                                 535-566
+=== /Users/fastfrank/mysten_repos/walrus/crates/walrus-core/src/encoding/mapping.rs
+  enum         SliverAssignmentError                                        12-22
+  fn           rotate_pairs                                                 24-66
+  fn           rotate_pairs_unchecked                                       68-77
+  fn           is_rotation                                                  79-86
+  impl         impl SliverPairIndex                                         88-99
+  fn           SliverPairIndex::to_shard_index                              89-98
+  impl         impl ShardIndex                                              101-111
+  fn           ShardIndex::to_pair_index                                    102-110
+  fn           rotation_offset                                              113-115
+  fn           rotate_by_bytes                                              117-125
+  fn           bytes_mod                                                    127-134
+  mod          tests                                                        136-318
+  fn           sliver_pairs                                                 146-157
+  fn           shard_index_pair_index_conversion_works                      167-182
+  fn           test_rotate_pairs                                            184-194
+  fn           test_rotate_pairs_unchecked                                  196-218
+  fn           test_is_rotation                                             220-231
+  fn           test_wrong_rotation_pairs                                    233-243
+  fn           test_idempotent_rotation                                     245-254
+  fn           test_shard_index_for_pair                                    263-274
+  fn           test_pair_index_for_shard                                    283-294
+  fn           test_bytes_mod                                               296-305
+  fn           bytes_mod_test                                               307-309
+  fn           test_rotate_by_bytes                                         311-317
+=== /Users/fastfrank/mysten_repos/walrus/crates/walrus-core/src/encoding/slivers.rs
+  type         PrimarySliver                                                40-41
+  type         SecondarySliver                                              43-44
+  struct       SliverData                                                   46-56
+  impl         impl<T: EncodingAxis> SliverData<T>                          58-413
+  fn           SliverData::new                                              59-71
+  fn           SliverData::new_empty                                        73-82
+  fn           SliverData::copy_symbol_to                                   84-94
+  fn           SliverData::verify                                           96-119
+  fn           SliverData::check_hash                                       121-144
+  fn           SliverData::has_correct_length                               146-152
+  fn           SliverData::expected_length                                  154-159
+  fn           SliverData::recovery_symbols                                 161-178
+  fn           SliverData::recovery_symbol_for_sliver                       180-211
+  fn           SliverData::decoding_symbol_for_sliver                       213-238
+  fn           SliverData::recover_sliver_without_verification              240-265
+  fn           SliverData::recover_sliver_from_decoding_symbols             267-295
+  fn           SliverData::try_recover_sliver_from_decoding_symbols         297-326
+  fn           SliverData::recover_sliver_or_generate_inconsistency_proof   328-379
+  fn           SliverData::get_merkle_root                                  381-392
+  fn           SliverData::len                                              394-397
+  fn           SliverData::is_empty                                         399-402
+  fn           SliverData::check_index                                      404-412
+  impl         impl<T: EncodingAxis> Display for SliverData<T>              415-425
+  fn           SliverData::fmt                                              416-424
+  struct       SliverPair                                                   427-434
+  impl         impl SliverPair                                              436-510
+  fn           SliverPair::index                                            437-442
+  fn           SliverPair::new_empty                                        444-463
+  fn           SliverPair::recovery_symbol_pair_for_sliver                  465-490
+  fn           SliverPair::pair_leaf_input                                  492-509
+  mod          tests                                                        512-862
+  fn           create_config_and_encode_pairs_and_get_metadata              526-543
+  fn           copy_symbol_to_modifies_empty_sliver_correctly               555-573
+  fn           new_sliver_copies_provided_slice                             575-584
+  fn           test_create_recovery_symbols                                 594-629
+  fn           test_recover_sliver_failure                                  641-662
+  fn           test_recover_sliver_from_symbols                             679-729
+  fn           test_recovery_symbols_empty_sliver                           737-744
+  fn           test_recover_all_slivers_from_f_plus_1                       762-830
+  fn           test_recovery_symbol_proof                                   838-861
+=== /Users/fastfrank/mysten_repos/walrus/crates/walrus-core/src/encoding/blob_encoding.rs
+  enum         OwnedOrBorrowedBlob                                          33-40
+  impl         impl<'a> OwnedOrBorrowedBlob<'a>                             42-69
+  fn           OwnedOrBorrowedBlob::new                                     43-46
+  fn           OwnedOrBorrowedBlob::into_owned                              48-55
+  fn           OwnedOrBorrowedBlob::len                                     57-63
+  fn           OwnedOrBorrowedBlob::is_empty                                65-68
+  impl         impl OwnedOrBorrowedBlob<'static>                            71-76
+  fn           OwnedOrBorrowedBlob::new_owned                               72-75
+  impl         impl<'a> AsRef<[u8]> for OwnedOrBorrowedBlob<'a>             78-85
+  fn           OwnedOrBorrowedBlob::as_ref                                  79-84
+  struct       BlobEncoderData                                              87-104
+  impl         impl BlobEncoderData                                         106-209
+  fn           BlobEncoderData::get_encoder                                 107-112
+  fn           BlobEncoderData::symbol_usize                                114-117
+  fn           BlobEncoderData::sliver_length                               119-121
+  fn           BlobEncoderData::empty_sliver                                123-129
+  fn           BlobEncoderData::empty_slivers                               131-134
+  fn           BlobEncoderData::empty_slivers_range                         136-141
+  fn           BlobEncoderData::empty_sliver_pairs                          143-150
+  fn           BlobEncoderData::compute_metadata_from_symbol_hashes         152-196
+  fn           BlobEncoderData::n_rows_usize                                198-200
+  fn           BlobEncoderData::n_columns_usize                             202-204
+  fn           BlobEncoderData::n_shards_usize                              206-208
+  struct       BlobEncoder                                                  211-221
+  impl         impl<'a> BlobEncoder<'a>                                     223-613
+  fn           BlobEncoder::new                                             224-264
+  fn           BlobEncoder::encode_with_metadata                            266-368
+  fn           BlobEncoder::encode_with_metadata_legacy                     370-403
+  fn           BlobEncoder::compute_metadata                                405-486
+  fn           BlobEncoder::blob                                            488-491
+  fn           BlobEncoder::symbol_usize                                    495-498
+  fn           BlobEncoder::symbol_at                                       500-511
+  fn           BlobEncoder::column_symbols                                  513-520
+  fn           BlobEncoder::rows                                            522-525
+  fn           BlobEncoder::rows_all                                        527-539
+  fn           BlobEncoder::get_expanded_matrix                             541-547
+  fn           BlobEncoder::systematic_primary_sliver                       549-559
+  fn           BlobEncoder::default_consistency_check                       561-612
+  struct       ExpandedMessageMatrix                                        615-630
+  impl         impl<'a> ExpandedMessageMatrix<'a>                           632-799
+  fn           ExpandedMessageMatrix::new                                   633-651
+  fn           ExpandedMessageMatrix::fill_systematic_with_rows             653-661
+  fn           ExpandedMessageMatrix::expanded_column_symbols               663-678
+  fn           ExpandedMessageMatrix::expand_all_columns                    680-698
+  fn           ExpandedMessageMatrix::expand_rows_for_secondary             700-714
+  fn           ExpandedMessageMatrix::get_metadata                          716-734
+  fn           ExpandedMessageMatrix::write_secondary_metadata              736-747
+  fn           ExpandedMessageMatrix::write_secondary_slivers               749-762
+  fn           ExpandedMessageMatrix::drop_recovery_symbols                 764-776
+  fn           ExpandedMessageMatrix::write_primary_metadata                778-786
+  fn           ExpandedMessageMatrix::write_primary_slivers                 788-798
+  struct       BlobDecoder                                                  801-820
+  impl         impl<D: Decoder, E: EncodingAxis> BlobDecoder<D, E>          822-998
+  fn           BlobDecoder::new                                             823-871
+  fn           BlobDecoder::decode                                          873-902
+  fn           BlobDecoder::check_and_write_slivers_to_workspace            904-951
+  fn           BlobDecoder::write_primary_sliver_to_workspace               953-958
+  fn           BlobDecoder::write_secondary_sliver_to_workspace             960-965
+  fn           BlobDecoder::perform_decoding                                967-993
+  fn           BlobDecoder::symbol_usize                                    995-997
+  mod          tests                                                        1000-1245
+  fn           test_matrix_construction                                     1043-1073
+  fn           test_metadata_computations_are_equal                         1075-1090
+  fn           test_blob_encode_decode                                      1092-1140
+  fn           test_encode_with_metadata                                    1142-1188
+  fn           test_encode_decode_and_verify                                1190-1225
+  fn           test_v1_blob_id_stability                                    1227-1244
+=== /Users/fastfrank/mysten_repos/walrus/crates/walrus-core/src/messages/storage_confirmation.rs
+  enum         StorageConfirmation                                          13-21
+  enum         BlobPersistenceType                                          23-35
+  struct       StorageConfirmationBody                                      37-45
+  struct       Confirmation                                                 47-51
+  impl         impl Confirmation                                            53-65
+  const        Confirmation::INTENT                                         54
+  fn           Confirmation::new                                            56-64
+  impl         impl TryFrom<ProtocolMessage<StorageConfirmationBody>> for Confirmation 67-81
+  type         Confirmation::Error                                          68
+  fn           Confirmation::try_from                                       69-80
+  impl         impl AsRef<ProtocolMessage<StorageConfirmationBody>> for Confirmation 83-87
+  fn           Confirmation::as_ref                                         84-86
+  type         SignedStorageConfirmation                                    89-90
+  impl         impl SignedStorageConfirmation                               92-107
+  fn           SignedStorageConfirmation::verify                            93-106
+  mod          tests                                                        109-172
+  const        EPOCH                                                        114
+  const        BLOB_ID                                                      115
+  fn           confirmation_is_correctly_encoded_permanent                  117-140
+  fn           confirmation_is_correctly_encoded_deletable                  142-171
+=== /Users/fastfrank/mysten_repos/walrus/crates/walrus-core/src/messages/certificate.rs
+  trait        <anon>                                                       10-11
+  type         ConfirmationCertificate                                      16-17
+  type         InvalidBlobCertificate                                       19-20
+  struct       ProtocolMessageCertificate                                   22-33
+  impl         impl<T> ProtocolMessageCertificate<T>                        35-79
+  fn           ProtocolMessageCertificate::new                              36-49
+  fn           ProtocolMessageCertificate::from_signed_messages_and_indices 51-78
+  enum         CertificateError                                             81-90

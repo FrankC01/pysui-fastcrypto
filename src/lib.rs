@@ -26,6 +26,17 @@ use std::str::FromStr;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
+use crate::walrus::ffi::{
+    WalrusEncodeResult,
+    WalrusSliverPair,
+    walrus_bls_aggregate,
+    walrus_bls_aggregate_verify,
+    walrus_bls_verify,
+    walrus_confirmation_bytes,
+    walrus_encode,
+    walrus_g1_compress,
+};
+
 mod walrus;
 
 type LibError = anyhow::Error;
@@ -553,6 +564,14 @@ fn pysui_fastcrypto(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(decode_bech32, m)?)?;
     m.add_function(wrap_pyfunction!(encode_bech32, m)?)?;
 
+    m.add_class::<WalrusSliverPair>()?;
+    m.add_class::<WalrusEncodeResult>()?;
+    m.add_function(wrap_pyfunction!(walrus_encode, m)?)?;
+    m.add_function(wrap_pyfunction!(walrus_confirmation_bytes, m)?)?;
+    m.add_function(wrap_pyfunction!(walrus_g1_compress, m)?)?;
+    m.add_function(wrap_pyfunction!(walrus_bls_aggregate, m)?)?;
+    m.add_function(wrap_pyfunction!(walrus_bls_aggregate_verify, m)?)?;
+    m.add_function(wrap_pyfunction!(walrus_bls_verify, m)?)?;
     Ok(())
 }
 
