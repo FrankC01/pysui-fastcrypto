@@ -1,3 +1,6 @@
+//    Copyright Frank V. Castellucci
+//    SPDX-License-Identifier: Apache-2.0
+
 //! pysui-fastcrypto is a python wrapper for fundamental use by pysui crypto functions.
 //!
 //! Portions of the code in this crate were used from MystenLabs Sui repository
@@ -22,6 +25,8 @@ use std::str::FromStr;
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+
+mod walrus;
 
 type LibError = anyhow::Error;
 type DefaultHash = Blake2b256;

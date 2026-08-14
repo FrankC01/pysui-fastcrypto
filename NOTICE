@@ -1,0 +1,39 @@
+pysui-fastcrypto
+Copyright Frank V. Castellucci
+SPDX-License-Identifier: Apache-2.0
+
+================================================================================
+Third-party code vendored into this project
+================================================================================
+
+--------------------------------------------------------------------------------
+walrus-core (RedStuff erasure coding and storage-confirmation message types)
+--------------------------------------------------------------------------------
+
+Portions of this software, located under `src/walrus/vendored/`, are derived
+from the walrus-core crate of the Walrus project.
+
+    Upstream:   https://github.com/MystenLabs/walrus
+    Component:  crates/walrus-core
+    Commit:     14641cc0edcc727825d07aa19df2eef8046a3c0d
+    Copyright:  Copyright (c) Walrus Foundation
+    License:    Apache-2.0
+
+The vendored code is a PARTIAL and MODIFIED subset of walrus-core. Specifically:
+
+  * Only the blob ENCODE path is vendored. All decode, sliver recovery, and
+    reconstruction code is deliberately omitted.
+  * Quilt (blob batching) support is not vendored.
+  * Upstream unit tests are not vendored.
+  * Imports, module paths, error types and trait boundaries have been adapted
+    to this crate.
+
+An exhaustive record of which upstream items were vendored, with file and line
+references against the pinned commit above, is maintained in
+`.claude/walrus-port-manifest.md`.
+
+Each vendored source file retains the original Walrus Foundation copyright
+notice and carries a provenance comment identifying its upstream origin.
+
+Both this project and walrus-core are licensed under Apache-2.0; the full
+license text is in the LICENSE file at the root of this repository.
