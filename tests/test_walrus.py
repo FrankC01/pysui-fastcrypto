@@ -40,12 +40,12 @@ class TestWalrusEncode:
 
     def test_blob_id_matches_upstream_vector(self):
         """The blob ID must match the value upstream pins for this input."""
-        result = pfc.walrus_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        result = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
         assert _b64url_unpadded(result.blob_id) == UPSTREAM_BLOB_ID_B64
 
     def test_blob_id_and_root_hash_are_raw_bytes(self):
         """Digests cross the boundary as bytes, never base64 or list[int]."""
-        result = pfc.walrus_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        result = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
         assert isinstance(result.blob_id, bytes)
         assert isinstance(result.root_hash, bytes)
         assert len(result.blob_id) == DIGEST_BYTES
@@ -53,12 +53,12 @@ class TestWalrusEncode:
 
     def test_one_sliver_pair_per_shard(self):
         """The sliver list is indexed by shard, so its length is n_shards."""
-        result = pfc.walrus_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        result = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
         assert len(result.slivers) == UPSTREAM_N_SHARDS
 
     def test_sliver_payloads_are_raw_bytes(self):
         """Sliver bodies are raw BCS bytes, usable directly as a PUT body."""
-        result = pfc.walrus_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        result = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
         for sliver in result.slivers:
             assert isinstance(sliver.primary, bytes)
             assert isinstance(sliver.secondary, bytes)
@@ -74,7 +74,7 @@ class TestWalrusEncode:
         and did not merely shuffle: without it every sliver would be sent to the
         wrong storage node, with no local error to signal it.
         """
-        result = pfc.walrus_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        result = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
         indices = [s.sliver_pair_index for s in result.slivers]
 
         assert sorted(indices) == list(range(UPSTREAM_N_SHARDS))
@@ -85,21 +85,21 @@ class TestWalrusEncode:
 
     def test_encoding_is_deterministic(self):
         """The same input must always produce the same blob ID."""
-        first = pfc.walrus_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
-        second = pfc.walrus_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        first = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        second = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
         assert first.blob_id == second.blob_id
         assert first.root_hash == second.root_hash
 
     def test_distinct_blobs_produce_distinct_ids(self):
         """A different payload must not collide with the upstream vector."""
-        other = pfc.walrus_encode(b"a different blob entirely", UPSTREAM_N_SHARDS)
-        upstream = pfc.walrus_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        other = pfc.redstuff_encode(b"a different blob entirely", UPSTREAM_N_SHARDS)
+        upstream = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
         assert other.blob_id != upstream.blob_id
 
     def test_zero_shards_rejected(self):
         """n_shards must be positive."""
         with pytest.raises(ValueError):
-            pfc.walrus_encode(UPSTREAM_BLOB, 0)
+            pfc.redstuff_encode(UPSTREAM_BLOB, 0)
 
 
 class TestWalrusConfirmationBytes:
@@ -111,7 +111,7 @@ class TestWalrusConfirmationBytes:
 
     def test_permanent_layout(self):
         """Permanent confirmations are 40 bytes with a known header."""
-        encoded = pfc.walrus_confirmation_bytes(self.EPOCH, self.BLOB_ID)
+        encoded = pfc.bls_confirmation_bytes(self.EPOCH, self.BLOB_ID)
         assert isinstance(encoded, bytes)
         assert len(encoded) == 40
         # intent: BLOB_CERT_MSG, version DEFAULT, app id STORAGE
@@ -122,7 +122,7 @@ class TestWalrusConfirmationBytes:
 
     def test_deletable_layout(self):
         """Deletable confirmations are 72 bytes and carry the object ID."""
-        encoded = pfc.walrus_confirmation_bytes(
+        encoded = pfc.bls_confirmation_bytes(
             self.EPOCH, self.BLOB_ID, self.OBJECT_ID
         )
         assert len(encoded) == 72
@@ -134,66 +134,92 @@ class TestWalrusConfirmationBytes:
 
     def test_permanent_and_deletable_differ(self):
         """The persistence discriminant must actually change the bytes."""
-        permanent = pfc.walrus_confirmation_bytes(self.EPOCH, self.BLOB_ID)
-        deletable = pfc.walrus_confirmation_bytes(
+        permanent = pfc.bls_confirmation_bytes(self.EPOCH, self.BLOB_ID)
+        deletable = pfc.bls_confirmation_bytes(
             self.EPOCH, self.BLOB_ID, self.OBJECT_ID
         )
         assert permanent != deletable
 
     def test_epoch_affects_bytes(self):
         """A different epoch produces a different signed message."""
-        first = pfc.walrus_confirmation_bytes(1, self.BLOB_ID)
-        second = pfc.walrus_confirmation_bytes(2, self.BLOB_ID)
+        first = pfc.bls_confirmation_bytes(1, self.BLOB_ID)
+        second = pfc.bls_confirmation_bytes(2, self.BLOB_ID)
         assert first != second
 
     @pytest.mark.parametrize("length", [0, 31, 33, 64])
     def test_bad_blob_id_length_rejected(self, length):
         """blob_id must be exactly 32 bytes."""
         with pytest.raises(ValueError):
-            pfc.walrus_confirmation_bytes(self.EPOCH, bytes(length))
+            pfc.bls_confirmation_bytes(self.EPOCH, bytes(length))
 
     @pytest.mark.parametrize("length", [0, 31, 33])
     def test_bad_object_id_length_rejected(self, length):
         """object_id must be exactly 32 bytes when supplied."""
         with pytest.raises(ValueError):
-            pfc.walrus_confirmation_bytes(self.EPOCH, self.BLOB_ID, bytes(length))
+            pfc.bls_confirmation_bytes(self.EPOCH, self.BLOB_ID, bytes(length))
 
 
 class TestWalrusBls:
     """BLS12-381 helpers.
 
-    Correctness of aggregation and verification is covered by the Rust unit
-    tests, which can generate real keypairs. These tests cover the Python
-    boundary: argument handling, error surfacing, and return types.
+    Most cases here cover the Python boundary: argument handling, error
+    surfacing, and return types — full aggregation/verification coverage
+    lives in the Rust unit tests. `bls_keygen`/`bls_sign` are
+    test-only helpers (no BIP-39/BIP-32 derivation, and unrelated to
+    `sign_message`/`sign_digest`, which reject BLS12381) that let a few
+    cases here also exercise a genuine sign -> verify/aggregate round trip
+    through the FFI boundary.
     """
 
     @pytest.mark.parametrize("length", [0, 47, 49, 95, 97])
     def test_g1_compress_rejects_wrong_width(self, length):
         """Only 48-byte compressed or 96-byte uncompressed keys are accepted."""
         with pytest.raises(ValueError):
-            pfc.walrus_g1_compress(bytes(length))
+            pfc.bls_g1_compress(bytes(length))
 
     def test_g1_compress_rejects_invalid_point(self):
         """A correctly sized but invalid G1 encoding must be rejected."""
         with pytest.raises(ValueError):
-            pfc.walrus_g1_compress(bytes([0xFF] * 96))
+            pfc.bls_g1_compress(bytes([0xFF] * 96))
 
     def test_aggregate_rejects_empty_set(self):
         """Aggregating nothing is an error, not an empty signature."""
         with pytest.raises(ValueError):
-            pfc.walrus_bls_aggregate([])
+            pfc.bls_aggregate([])
 
     def test_aggregate_rejects_malformed_signature(self):
         """Signatures must be 96 bytes."""
         with pytest.raises(ValueError):
-            pfc.walrus_bls_aggregate([bytes(95)])
+            pfc.bls_aggregate([bytes(95)])
 
     def test_aggregate_verify_rejects_empty_key_set(self):
         """Verification against no signers is an error."""
         with pytest.raises(ValueError):
-            pfc.walrus_bls_aggregate_verify(bytes(96), [], b"message")
+            pfc.bls_aggregate_verify(bytes(96), [], b"message")
 
     def test_verify_rejects_malformed_key(self):
         """A malformed public key raises rather than returning False."""
         with pytest.raises(ValueError):
-            pfc.walrus_bls_verify(bytes(10), b"message", bytes(96))
+            pfc.bls_verify(bytes(10), b"message", bytes(96))
+
+    def test_keygen_signature_verifies(self):
+        """A genuine keygen'd keypair signs, and the signature verifies."""
+        public, private = pfc.bls_keygen()
+        message = b"walrus storage confirmation"
+        signature = pfc.bls_sign(private, message)
+        assert pfc.bls_verify(public, message, signature)
+
+    def test_keygen_signature_fails_wrong_message(self):
+        """A genuine signature does not verify against a different message."""
+        public, private = pfc.bls_keygen()
+        signature = pfc.bls_sign(private, b"walrus storage confirmation")
+        assert not pfc.bls_verify(public, b"a different message", signature)
+
+    def test_keygen_aggregate_verifies(self):
+        """Aggregating genuine signatures over the same message verifies."""
+        message = b"walrus storage confirmation"
+        keypairs = [pfc.bls_keygen() for _ in range(3)]
+        signatures = [pfc.bls_sign(private, message) for _, private in keypairs]
+        aggregate = pfc.bls_aggregate(signatures)
+        public_keys = [public for public, _ in keypairs]
+        assert pfc.bls_aggregate_verify(aggregate, public_keys, message)

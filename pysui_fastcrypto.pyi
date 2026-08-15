@@ -81,7 +81,7 @@ def encode_bech32(prv_bytes: bytes, hrp: str) -> str:
 # Walrus blob encoding and BLS12-381 confirmations
 # ---------------------------------------------------------------------------
 
-class WalrusSliverPair:
+class RedstuffSliverPair:
     """One shard's share of an encoded blob.
 
     RedStuff encodes along two axes and a storage node holds both slivers for
@@ -107,7 +107,7 @@ class WalrusSliverPair:
         """BCS-serialised secondary sliver, usable directly as a PUT body."""
         ...
 
-class WalrusEncodeResult:
+class RedstuffEncodeResult:
     """The result of encoding a blob for Walrus."""
 
     @property
@@ -126,7 +126,7 @@ class WalrusEncodeResult:
         ...
 
     @property
-    def slivers(self) -> list[WalrusSliverPair]:
+    def slivers(self) -> list[RedstuffSliverPair]:
         """Per-shard sliver pairs, indexed by shard.
 
         Entry ``i`` belongs to the storage node holding shard ``i``. This
@@ -134,7 +134,7 @@ class WalrusEncodeResult:
         """
         ...
 
-def walrus_encode(blob: bytes, n_shards: int) -> WalrusEncodeResult:
+def redstuff_encode(blob: bytes, n_shards: int) -> RedstuffEncodeResult:
     """Encode a blob with RedStuff, returning shard-aligned slivers and metadata.
 
     Releases the GIL for the duration of the encode and reads through the
@@ -145,7 +145,7 @@ def walrus_encode(blob: bytes, n_shards: int) -> WalrusEncodeResult:
     """
     ...
 
-def walrus_confirmation_bytes(
+def bls_confirmation_bytes(
     epoch: int,
     blob_id: bytes,
     object_id: bytes | None = None,
@@ -161,7 +161,7 @@ def walrus_confirmation_bytes(
     """
     ...
 
-def walrus_g1_compress(public_key: bytes) -> bytes:
+def bls_g1_compress(public_key: bytes) -> bytes:
     """Convert a committee public key to its 48-byte compressed form.
 
     Accepts the 96-byte uncompressed encoding stored on-chain or an
@@ -172,7 +172,7 @@ def walrus_g1_compress(public_key: bytes) -> bytes:
     """
     ...
 
-def walrus_bls_aggregate(signatures: list[bytes]) -> bytes:
+def bls_aggregate(signatures: list[bytes]) -> bytes:
     """Aggregate confirmation signatures into a single 96-byte signature.
 
     Raises:
@@ -180,7 +180,7 @@ def walrus_bls_aggregate(signatures: list[bytes]) -> bytes:
     """
     ...
 
-def walrus_bls_aggregate_verify(
+def bls_aggregate_verify(
     aggregate_signature: bytes,
     public_keys: list[bytes],
     message: bytes,
@@ -199,7 +199,7 @@ def walrus_bls_aggregate_verify(
     """
     ...
 
-def walrus_bls_verify(public_key: bytes, message: bytes, signature: bytes) -> bool:
+def bls_verify(public_key: bytes, message: bytes, signature: bytes) -> bool:
     """Verify a single confirmation signature against one signer's public key.
 
     Returns:
@@ -208,5 +208,32 @@ def walrus_bls_verify(public_key: bytes, message: bytes, signature: bytes) -> bo
 
     Raises:
         ValueError: if an input cannot be parsed.
+    """
+    ...
+
+def bls_keygen() -> tuple[bytes, bytes]:
+    """Generate a throwaway BLS12-381 keypair for tests.
+
+    Random keygen only — no BIP-39/BIP-32 derivation. Walrus committee keys
+    are generated and held by storage-node operators, never by this
+    library; this exists solely to let tests mint a valid keypair to sign
+    confirmations against.
+
+    Returns:
+        A ``(public, private)`` tuple, matching the module's existing
+        ``(..., public, private)`` return-order convention.
+    """
+    ...
+
+def bls_sign(private_key: bytes, message: bytes) -> bytes:
+    """Sign a message with a raw BLS12-381 private key, for tests.
+
+    Reconstructs the keypair directly from the private key bytes rather than
+    going through ``sign_message``/``sign_digest``, which reject BLS12381.
+    Pairs with :func:`bls_keygen` to exercise a genuine sign ->
+    verify/aggregate round trip.
+
+    Raises:
+        ValueError: if the private key is not a valid BLS12-381 scalar.
     """
     ...

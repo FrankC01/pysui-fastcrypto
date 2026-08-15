@@ -18,12 +18,15 @@
 
 use fastcrypto::bls12381::min_pk::{
     BLS12381AggregateSignature,
+    BLS12381KeyPair,
+    BLS12381PrivateKey,
     BLS12381PublicKey,
     BLS12381Signature,
 };
 use fastcrypto::groups::bls12381::{G1Element, G1ElementUncompressed};
 use fastcrypto::serde_helpers::ToFromByteArray;
-use fastcrypto::traits::{AggregateAuthenticator, ToFromBytes, VerifyingKey};
+use fastcrypto::traits::{AggregateAuthenticator, KeyPair, Signer, ToFromBytes, VerifyingKey};
+use rand::thread_rng;
 use thiserror::Error;
 
 /// Length in bytes of a compressed BLS12-381 G1 public key.
@@ -56,6 +59,10 @@ pub(crate) enum BlsError {
     /// A signature was well-sized but could not be parsed as a G2 point.
     #[error("invalid BLS12-381 signature encoding")]
     InvalidSignature,
+
+    /// A private key was not a valid BLS12-381 scalar.
+    #[error("invalid BLS12-381 private key encoding")]
+    InvalidPrivateKey,
 
     /// Aggregation was attempted over an empty signature set.
     #[error("cannot aggregate an empty signature set")]
@@ -170,6 +177,33 @@ pub(crate) fn verify_single(
     let key = parse_public_key(public_key)?;
     let parsed = parse_signature(signature)?;
     Ok(key.verify(message, &parsed).is_ok())
+}
+
+/// Generates a throwaway BLS12-381 keypair for tests.
+///
+/// Random keygen only — no BIP-39/BIP-32 derivation. Mnemonic-based
+/// derivation for BLS12381 is architecturally unsupported elsewhere in this
+/// crate; Walrus committee keys are generated and held by storage-node
+/// operators, never by this library. This exists solely to let tests mint a
+/// valid keypair to sign confirmations against.
+///
+/// Returns `(public, private)` raw bytes.
+pub(crate) fn generate_keypair() -> (Vec<u8>, Vec<u8>) {
+    let kp = BLS12381KeyPair::generate(&mut thread_rng());
+    let public = kp.public().as_ref().to_vec();
+    let private = kp.private().as_ref().to_vec();
+    (public, private)
+}
+
+/// Signs a message with a raw BLS12-381 private key, for tests.
+///
+/// Reconstructs the keypair directly from the private key bytes, bypassing
+/// `kp_from_bytes`/`SuiKeyPair` entirely, so it is unaffected by the
+/// BLS12381 signing/derivation restriction elsewhere in this crate.
+pub(crate) fn sign(private_key: &[u8], message: &[u8]) -> Result<Vec<u8>, BlsError> {
+    let sk = BLS12381PrivateKey::from_bytes(private_key).map_err(|_| BlsError::InvalidPrivateKey)?;
+    let kp = BLS12381KeyPair::from(sk);
+    Ok(kp.sign(message).as_ref().to_vec())
 }
 
 #[cfg(test)]

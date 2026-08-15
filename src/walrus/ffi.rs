@@ -59,15 +59,15 @@ fn to_digest(bytes: &[u8], what: &str) -> PyResult<[u8; DIGEST_BYTES]> {
 /// shard it is assigned. `sliver_pair_index` is the value that belongs in the
 /// sliver PUT URL path; it is NOT the shard index, and the two differ by a
 /// blob-ID-dependent rotation.
-#[pyclass(module = "pysui_fastcrypto", name = "WalrusSliverPair", frozen)]
-pub struct WalrusSliverPair {
+#[pyclass(module = "pysui_fastcrypto", name = "RedstuffSliverPair", frozen)]
+pub struct RedstuffSliverPair {
     sliver_pair_index: u16,
     primary: Vec<u8>,
     secondary: Vec<u8>,
 }
 
 #[pymethods]
-impl WalrusSliverPair {
+impl RedstuffSliverPair {
     /// The sliver pair index, for use in the sliver PUT URL path.
     #[getter]
     fn sliver_pair_index(&self) -> u16 {
@@ -88,7 +88,7 @@ impl WalrusSliverPair {
 
     fn __repr__(&self) -> String {
         format!(
-            "WalrusSliverPair(sliver_pair_index={}, primary={} bytes, secondary={} bytes)",
+            "RedstuffSliverPair(sliver_pair_index={}, primary={} bytes, secondary={} bytes)",
             self.sliver_pair_index,
             self.primary.len(),
             self.secondary.len()
@@ -101,15 +101,15 @@ impl WalrusSliverPair {
 /// `slivers` is indexed by SHARD: entry `i` belongs to the storage node holding
 /// shard `i`. That alignment is produced by applying the blob-ID rotation after
 /// encoding, so callers must not re-derive it.
-#[pyclass(module = "pysui_fastcrypto", name = "WalrusEncodeResult", frozen)]
-pub struct WalrusEncodeResult {
+#[pyclass(module = "pysui_fastcrypto", name = "RedstuffEncodeResult", frozen)]
+pub struct RedstuffEncodeResult {
     blob_id: [u8; DIGEST_BYTES],
     root_hash: [u8; DIGEST_BYTES],
-    slivers: Vec<Py<WalrusSliverPair>>,
+    slivers: Vec<Py<RedstuffSliverPair>>,
 }
 
 #[pymethods]
-impl WalrusEncodeResult {
+impl RedstuffEncodeResult {
     /// Raw 32-byte blob ID.
     ///
     /// Callers need this in two encodings — unpadded URL-safe base64 for URL
@@ -128,12 +128,12 @@ impl WalrusEncodeResult {
 
     /// Per-shard sliver pairs, indexed by shard.
     #[getter]
-    fn slivers(&self, py: Python<'_>) -> Vec<Py<WalrusSliverPair>> {
+    fn slivers(&self, py: Python<'_>) -> Vec<Py<RedstuffSliverPair>> {
         self.slivers.iter().map(|s| s.clone_ref(py)).collect()
     }
 
     fn __repr__(&self) -> String {
-        format!("WalrusEncodeResult(shards={})", self.slivers.len())
+        format!("RedstuffEncodeResult(shards={})", self.slivers.len())
     }
 }
 
@@ -144,11 +144,11 @@ impl WalrusEncodeResult {
 /// copied first.
 #[pyfunction]
 #[pyo3(signature = (blob, n_shards))]
-pub fn walrus_encode(
+pub fn redstuff_encode(
     py: Python<'_>,
     blob: PyBackedBytes,
     n_shards: u16,
-) -> PyResult<WalrusEncodeResult> {
+) -> PyResult<RedstuffEncodeResult> {
     let shards = NonZeroU16::new(n_shards)
         .ok_or_else(|| PyValueError::new_err("n_shards must be greater than zero"))?;
 
@@ -192,7 +192,7 @@ pub fn walrus_encode(
         .map(|s| {
             Py::new(
                 py,
-                WalrusSliverPair {
+                RedstuffSliverPair {
                     sliver_pair_index: s.sliver_pair_index,
                     primary: s.primary,
                     secondary: s.secondary,
@@ -201,7 +201,7 @@ pub fn walrus_encode(
         })
         .collect::<PyResult<Vec<_>>>()?;
 
-    Ok(WalrusEncodeResult {
+    Ok(RedstuffEncodeResult {
         blob_id: raw.blob_id,
         root_hash: raw.root_hash,
         slivers,
@@ -215,7 +215,7 @@ pub fn walrus_encode(
 /// Verifying a confirmation signature requires these exact bytes.
 #[pyfunction]
 #[pyo3(signature = (epoch, blob_id, object_id = None))]
-pub fn walrus_confirmation_bytes<'py>(
+pub fn bls_confirmation_bytes<'py>(
     py: Python<'py>,
     epoch: u32,
     blob_id: Vec<u8>,
@@ -239,7 +239,7 @@ pub fn walrus_confirmation_bytes<'py>(
 /// Accepts the 96-byte uncompressed encoding stored on-chain or an
 /// already-compressed 48-byte key. Both are subgroup-checked.
 #[pyfunction]
-pub fn walrus_g1_compress<'py>(
+pub fn bls_g1_compress<'py>(
     py: Python<'py>,
     public_key: Vec<u8>,
 ) -> PyResult<Bound<'py, PyBytes>> {
@@ -250,7 +250,7 @@ pub fn walrus_g1_compress<'py>(
 
 /// Aggregates confirmation signatures into a single 96-byte signature.
 #[pyfunction]
-pub fn walrus_bls_aggregate<'py>(
+pub fn bls_aggregate<'py>(
     py: Python<'py>,
     signatures: Vec<Vec<u8>>,
 ) -> PyResult<Bound<'py, PyBytes>> {
@@ -265,7 +265,7 @@ pub fn walrus_bls_aggregate<'py>(
 /// compressed form. Returns `False` for a well-formed signature that does not
 /// verify; raises `ValueError` only when an input cannot be parsed.
 #[pyfunction]
-pub fn walrus_bls_aggregate_verify(
+pub fn bls_aggregate_verify(
     aggregate_signature: Vec<u8>,
     public_keys: Vec<Vec<u8>>,
     message: Vec<u8>,
@@ -279,11 +279,47 @@ pub fn walrus_bls_aggregate_verify(
 /// Returns `False` for a well-formed signature that does not verify; raises
 /// `ValueError` only when an input cannot be parsed.
 #[pyfunction]
-pub fn walrus_bls_verify(
+pub fn bls_verify(
     public_key: Vec<u8>,
     message: Vec<u8>,
     signature: Vec<u8>,
 ) -> PyResult<bool> {
     bls::verify_single(&public_key, &message, &signature)
         .map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// Generates a throwaway BLS12-381 keypair for tests.
+///
+/// Random keygen only — no BIP-39/BIP-32 derivation; mnemonic-based key
+/// derivation for BLS12381 is architecturally unsupported elsewhere in this
+/// crate (see `validate_path` in `lib.rs`). Walrus committee keys are
+/// generated and held by storage-node operators, never by this library, so
+/// this exists solely to let Python-side tests mint a valid keypair to sign
+/// confirmations against.
+///
+/// Returns `(public, private)`, matching the module's existing
+/// `(..., public, private)` return-order convention.
+#[pyfunction]
+pub fn bls_keygen<'py>(
+    py: Python<'py>,
+) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
+    let (public, private) = bls::generate_keypair();
+    Ok((PyBytes::new(py, &public), PyBytes::new(py, &private)))
+}
+
+/// Signs a message with a raw BLS12-381 private key, for tests.
+///
+/// Reconstructs the keypair directly from the private key bytes rather than
+/// going through `sign_message`/`sign_digest`, which reject BLS12381; pairs
+/// with `bls_keygen` to let tests exercise a genuine sign -> verify /
+/// aggregate round trip.
+#[pyfunction]
+pub fn bls_sign<'py>(
+    py: Python<'py>,
+    private_key: Vec<u8>,
+    message: Vec<u8>,
+) -> PyResult<Bound<'py, PyBytes>> {
+    let signature =
+        bls::sign(&private_key, &message).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(PyBytes::new(py, &signature))
 }
