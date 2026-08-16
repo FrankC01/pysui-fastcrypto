@@ -126,6 +126,17 @@ class RedstuffEncodeResult:
         ...
 
     @property
+    def metadata_bcs(self) -> bytes:
+        """BCS-encoded blob metadata, ready to use directly as a PUT body.
+
+        A storage node will not accept ANY sliver for a blob until this has
+        been PUT to that node -- it answers 400 FAILED_PRECONDITION with
+        reason METADATA_NOT_FOUND. Send metadata first, per node, then the
+        slivers.
+        """
+        ...
+
+    @property
     def slivers(self) -> list[RedstuffSliverPair]:
         """Per-shard sliver pairs, indexed by shard.
 

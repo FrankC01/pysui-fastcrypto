@@ -37,6 +37,7 @@ struct RawSliverPair {
 struct RawEncoded {
     blob_id: [u8; DIGEST_BYTES],
     root_hash: [u8; DIGEST_BYTES],
+    metadata_bcs: Vec<u8>,
     slivers: Vec<RawSliverPair>,
 }
 
@@ -105,6 +106,7 @@ impl RedstuffSliverPair {
 pub struct RedstuffEncodeResult {
     blob_id: [u8; DIGEST_BYTES],
     root_hash: [u8; DIGEST_BYTES],
+    metadata_bcs: Vec<u8>,
     slivers: Vec<Py<RedstuffSliverPair>>,
 }
 
@@ -126,6 +128,16 @@ impl RedstuffEncodeResult {
         PyBytes::new(py, &self.root_hash)
     }
 
+    /// BCS-encoded blob metadata, ready to use directly as a PUT body.
+    ///
+    /// A storage node will not accept ANY sliver for a blob until this has been
+    /// PUT to that node — it answers 400 FAILED_PRECONDITION with reason
+    /// METADATA_NOT_FOUND. Send metadata first, per node, then the slivers.
+    #[getter]
+    fn metadata_bcs<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.metadata_bcs)
+    }
+
     /// Per-shard sliver pairs, indexed by shard.
     #[getter]
     fn slivers(&self, py: Python<'_>) -> Vec<Py<RedstuffSliverPair>> {
@@ -138,6 +150,11 @@ impl RedstuffEncodeResult {
 }
 
 /// Encodes a blob with RedStuff and returns shard-aligned slivers plus metadata.
+///
+/// Upload order is not optional: a storage node rejects every sliver for a blob
+/// until `metadata_bcs` has been PUT to that node, answering 400
+/// FAILED_PRECONDITION with reason METADATA_NOT_FOUND. Send metadata first, per
+/// node, then that node's slivers.
 ///
 /// The GIL is released for the whole encode, which is CPU-bound and can be long
 /// for large blobs. The input is read through the Python buffer rather than
@@ -171,6 +188,13 @@ pub fn redstuff_encode(
             let blob_id = metadata.blob_id().0;
             let root_hash = metadata.metadata().compute_root_hash().bytes();
 
+            // The INNER `BlobMetadata`, not the `…WithId` wrapper: the upstream
+            // node handler is typed `Bcs<BlobMetadata>`, and the client sends
+            // `metadata.as_ref()`. Serialising the wrapper instead would prepend
+            // the blob ID and be rejected. Done here, inside the detached block,
+            // so the GIL stays released.
+            let metadata_bcs = bcs::to_bytes(metadata.metadata()).map_err(|e| e.to_string())?;
+
             // Consume `pairs` rather than borrowing it, and drop each pair as soon
             // as it is serialised. BCS output is a full second copy of the encoded
             // data — roughly 4.5x the blob — so holding the source pairs alive for
@@ -196,6 +220,7 @@ pub fn redstuff_encode(
             Ok(RawEncoded {
                 blob_id,
                 root_hash,
+                metadata_bcs,
                 slivers,
             })
         })
@@ -219,6 +244,7 @@ pub fn redstuff_encode(
     Ok(RedstuffEncodeResult {
         blob_id: raw.blob_id,
         root_hash: raw.root_hash,
+        metadata_bcs: raw.metadata_bcs,
         slivers,
     })
 }

@@ -23,6 +23,20 @@
 //   * `EncodingAxis` is imported from `vendored::encoding`, matching upstream
 //     where `lib.rs` imports it from the `encoding` module.
 //   * Upstream `#[cfg(test)]` code omitted.
+//
+// CAUTION — do NOT "simplify" `EncodingType`:
+//   Its `#[serde(try_from = "EncodingTypeForSerde", into = "EncodingTypeForSerde")]`
+//   attribute and the `EncodingTypeForSerde` shim are LOAD-BEARING and must stay
+//   verbatim. `EncodingType` declares `RS2 = 1`, but that is a `repr`
+//   discriminant and serde ignores it: a plain derive serialises by variant
+//   POSITION, and RS2 is the only variant, so it would go on the wire as 0x00.
+//   Upstream routes through `EncodingTypeForSerde`, where index 0 is the
+//   deprecated RedStuffRaptorQ and index 1 is RS2, putting 0x01 on the wire.
+//   This shim was dropped in the original port. The result was that every
+//   testnet storage node rejected the metadata PUT with 400 "unable to decode
+//   request body as BCS" (the node read 0x00 as RedStuffRaptorQ, whose TryFrom
+//   returns Err). It did not affect blob IDs, so correctness gate A still
+//   passed and nothing local caught it. Restored 2026-08-16.
 
 //! Core Walrus types — blob IDs, sliver indices and encoding types.
 //! Vendored from walrus-core's crate root.
@@ -364,12 +378,54 @@ index_type!(
 #[error("the provided value is not a valid EncodingType")]
 pub struct InvalidEncodingType;
 
+/// Serde representation of encoding type, including deprecated variants for
+/// deserializing remotely fetched metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[deprecated = "this is only intended for (de)serialization purposes; use EncodingType instead"]
+#[repr(u8)]
+// Important: This enum type exists to ensure correct serialization/deserialization of the
+// `EncodingType` enum to/from BCS as BCS uses the enum variant index as the value. This means that
+// new encoding types must be added at the bottom of this enum. The value of enum variants in the
+// `EncodingType` enum should be the same as the index (starting from 0) of the variant in this
+// enum.
+enum EncodingTypeForSerde {
+    /// Original RedStuff encoding using the RaptorQ erasure code (no longer supported).
+    RedStuffRaptorQ,
+    /// RedStuff using the Reed-Solomon erasure code.
+    RS2,
+}
+
 /// Supported Walrus encoding types.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash, Serialize, Deserialize)]
+#[serde(try_from = "EncodingTypeForSerde", into = "EncodingTypeForSerde")]
 #[repr(u8)]
+#[allow(deprecated)]
 pub enum EncodingType {
     /// RedStuff using the Reed-Solomon erasure code.
     RS2 = 1,
+}
+
+#[allow(deprecated)]
+impl TryFrom<EncodingTypeForSerde> for EncodingType {
+    type Error = InvalidEncodingType;
+
+    #[inline]
+    fn try_from(value: EncodingTypeForSerde) -> Result<Self, Self::Error> {
+        match value {
+            EncodingTypeForSerde::RedStuffRaptorQ => Err(InvalidEncodingType),
+            EncodingTypeForSerde::RS2 => Ok(EncodingType::RS2),
+        }
+    }
+}
+
+#[allow(deprecated)]
+impl From<EncodingType> for EncodingTypeForSerde {
+    #[inline]
+    fn from(value: EncodingType) -> Self {
+        match value {
+            EncodingType::RS2 => EncodingTypeForSerde::RS2,
+        }
+    }
 }
 
 impl From<EncodingType> for u8 {

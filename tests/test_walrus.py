@@ -102,6 +102,76 @@ class TestWalrusEncode:
             pfc.redstuff_encode(UPSTREAM_BLOB, 0)
 
 
+class TestWalrusBlobMetadata:
+    """The BCS metadata body a node requires before it accepts any sliver."""
+
+    def test_metadata_bcs_is_raw_bytes(self):
+        """The payload crosses the boundary as bytes, never base64."""
+        result = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        assert isinstance(result.metadata_bcs, bytes)
+        assert len(result.metadata_bcs) > 0
+
+    def test_metadata_bcs_is_deterministic(self):
+        """The same blob and shard count must produce identical metadata."""
+        first = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        second = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        assert first.metadata_bcs == second.metadata_bcs
+
+    def test_metadata_bcs_opens_with_v1_variant(self):
+        """BlobMetadata is an enum; V1 is variant 0, so BCS leads with 0x00."""
+        result = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        assert result.metadata_bcs[0] == 0x00
+
+    def test_metadata_bcs_encoding_type_is_rs2_on_the_wire(self):
+        """The encoding type byte must be 0x01 (RS2), not 0x00.
+
+        `EncodingType` declares `RS2 = 1`, but that is a `repr` discriminant and
+        serde ignores it — a derived impl would serialise by variant POSITION,
+        and RS2 is the only variant, so position 0. Upstream avoids this by
+        routing through `EncodingTypeForSerde`, where index 0 is the deprecated
+        RedStuffRaptorQ and index 1 is RS2.
+
+        Dropping that indirection in the vendored copy put 0x00 on the wire and
+        every testnet storage node rejected the metadata PUT with 400
+        "unable to decode request body as BCS" — the node decoded 0x00 as
+        RedStuffRaptorQ, whose TryFrom returns Err. Nothing else in the payload
+        was wrong, and no other test could see it.
+        """
+        result = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        assert result.metadata_bcs[1] == 0x01
+
+    def test_metadata_bcs_carries_unencoded_length(self):
+        """Field order is encoding_type, unencoded_length, hashes.
+
+        With the V1 variant tag and a single-byte encoding_type ahead of it,
+        unencoded_length is the u64 little-endian at offset 2.
+        """
+        result = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        unencoded_length = int.from_bytes(result.metadata_bcs[2:10], "little")
+        assert unencoded_length == len(UPSTREAM_BLOB)
+
+    def test_metadata_bcs_excludes_the_blob_id(self):
+        """The inner BlobMetadata is sent, not the ...WithId wrapper.
+
+        Upstream's handler is typed Bcs<BlobMetadata>. Serialising the wrapper
+        would prepend the 32-byte blob ID and be rejected by the node.
+        """
+        result = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        assert not result.metadata_bcs.startswith(result.blob_id)
+
+    def test_metadata_bcs_grows_with_shard_count(self):
+        """One sliver pair hash per shard, so more shards means more bytes."""
+        small = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        large = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS * 3)
+        assert len(large.metadata_bcs) > len(small.metadata_bcs)
+
+    def test_distinct_blobs_produce_distinct_metadata(self):
+        """The hashes cover the encoded data, so payload changes propagate."""
+        other = pfc.redstuff_encode(b"a different blob entirely", UPSTREAM_N_SHARDS)
+        upstream = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        assert other.metadata_bcs != upstream.metadata_bcs
+
+
 class TestWalrusConfirmationBytes:
     """The exact byte sequence a storage node signs."""
 

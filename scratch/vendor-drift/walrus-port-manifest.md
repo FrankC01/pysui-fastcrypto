@@ -239,12 +239,45 @@ NOT needed: `get_sliver_hash` (464-469/556-568), `symbol_size` (474-478/580-588)
 | `SliverPairIndex` | 433-441 | pub |
 | `SliverPairIndex::to_sliver_index` | 474-491 | pub |
 | `index_type!(ShardIndex)` | 513-517 | pub |
+| `InvalidEncodingType` | 753-756 | pub |
+| `EncodingTypeForSerde` | 768-773 | private |
 | `enum EncodingType` | 775-784 | pub |
+| `EncodingType::Error` (TryFrom<EncodingTypeForSerde>) | 788-788 | pub |
+| `EncodingType::try_from` (TryFrom<EncodingTypeForSerde>) | 790-796 | pub |
+| `EncodingTypeForSerde::from` | 801-806 | pub |
 | `impl From<EncodingType> for u8` | 809-814 | pub |
+| `EncodingType::Error` (TryFrom<u8>) | 817-817 | pub |
+| `EncodingType::try_from` (TryFrom<u8>) | 819-825 | pub |
+| `EncodingType::Err` (FromStr) | 829-829 | pub |
+| `EncodingType::from_str` | 831-837 | pub |
 | `EncodingType::required_alignment` | 841-847 | pub |
+| `EncodingType::max_symbol_size` | 849-855 | pub |
+| `EncodingType::fmt` (Display) | 865-870 | pub |
 | `macro_rules! ensure` | 906-957 | exported |
 
 Blob ID derivation: `Blake2b256( [encoding_type as u8] || unencoded_length.to_le_bytes() || merkle_root.bytes() )`. `EncodingType::RS2 = 1`. `Display` is base64url NO PADDING.
+
+**`EncodingType` wire encoding — corrected 2026-08-16.** `RS2 = 1` is a `repr`
+discriminant and **serde ignores it**. The value that reaches the wire comes from
+`EncodingTypeForSerde` via `#[serde(try_from/into)]`, where index 0 is the
+deprecated RedStuffRaptorQ and index 1 is RS2. Note the asymmetry: blob ID
+derivation above uses `encoding_type as u8` (the repr, = 1), while BCS uses the
+serde path — they agree only because the shim exists.
+
+This entry previously listed `EncodingTypeForSerde` and both conversion impls as
+deliberately excluded. That classification was WRONG and the port acted on it: the
+shim was omitted, RS2 serialised as `0x00`, and every reachable testnet storage
+node rejected the metadata PUT with 400 "unable to decode request body as BCS".
+Blob IDs were unaffected, so correctness gate A still passed and nothing local
+caught it. Now covered by gate C in `src/walrus/correctness.rs`.
+
+Audit finding from the same pass: seven `EncodingType` items were on the exclusion
+list while actually being vendored (`InvalidEncodingType`, `EncodingTypeForSerde`,
+`TryFrom<EncodingTypeForSerde>`, `From<EncodingType> for EncodingTypeForSerde`,
+`TryFrom<u8>`, `FromStr`, `max_symbol_size`, `Display`). All are now in the ported
+table above. Only `EncodingType::is_supported` remains genuinely excluded. A
+mis-excluded item is invisible to every future drift check — worth re-auditing the
+other exclusion lists for the same error.
 
 ## utils.rs
 
@@ -314,7 +347,7 @@ Total 40 bytes (permanent) / 72 bytes (deletable).
 - **metadata.rs:** `VerificationError` (43-61), `QuiltPatchV1` (63-78), `UnverifiedBlobMetadataWithId` (325-328), `VerifiedBlobMetadataWithId::is_encoding_config_applicable` (392-404), `VerifiedBlobMetadataWithId::n_shards` (406-416), `BlobMetadataWithId::as_ref` (456-458), `BlobMetadata::mut_inner` (523-531), `BlobMetadataV1::get_sliver_hash` (556-568), `BlobMetadataV1::symbol_size` (580-588), `BlobMetadataV1::encoded_size` (590-602).
 - **messages.rs:** `SignedMessage` (67-84), `SignedMessage::new_from_encoded` (87-94), `SignedMessage::verify_signature_and_get_message` (98-111), `SignedMessage::verify_signature_and_contents` (113-143), `MessageVerificationError` (154-177).
 - **merkle.rs:** `path_length` (345-351).
-- **lib.rs:** `PublicKey` (71-72), `NetworkPublicKey` (73-74), `Signature` (75-76), `Certificate` (77-78), `DefaultHashFunction` (79-80), `EpochCount` (83-84), `SUPPORTED_AND_DEFAULT_ENCODING` (86-88), `SUPPORTED_ENCODING_TYPES` (90-91), `DEFAULT_ENCODING` (93-94), `EpochSchema` (98-100), `BlobId::ZERO` (122-123), `BlobId::MAX` (125-126), `BlobId::first_two_bytes` (147-157), `QuiltPatchId` (197-208), `QuiltPatchId::new` (211-217), `QuiltPatchId::to_bytes` (219-225), `QuiltPatchId::from_bytes` (227-235), `QuiltPatchId::zero` (237-243), `QuiltPatchId::version_enum` (245-253), `QuiltPatchId::fmt` (257-259), `QuiltPatchId::fmt` (263-269), `QuiltPatchId::Err` (273-273), `QuiltPatchId::from_str` (275-294), `BlobIdParseError` (297-300), `BlobId::Error` (303-303), `BlobId::try_from` (305-308), `BlobId::Err` (312-312), `BlobId::from_str` (314-321), `SuiObjectId::LENGTH` (336-337), `SuiObjectId::from` (342-344), `SuiObjectId::from` (349-351), `ObjectID::from` (356-358), `ObjectID::from` (363-365), `SuiObjectIdParseError` (368-371), `SuiObjectId::Error` (374-374), `SuiObjectId::try_from` (376-379), `SliverPairIndex::from` (442-444), `SliverIndex::from` (448-450), `SliverIndex::partial_cmp` (454-456), `SliverIndex::eq` (460-462), `SliverIndex::Err` (466-466), `SliverIndex::from_str` (468-470), `SliverIndex::to_pair_index` (495-510), `ShardRange` (519-522), `ShardIndex::range` (525-554), `usize::from` (558-560), `Sliver` (565-568), `Sliver::hash` (571-575), `Sliver::len` (577-580), `Sliver::is_empty` (582-585), `Sliver::verify` (587-597), `Sliver::sliver_index` (599-602), `Sliver::to_raw` (604-611), `DecodingSymbolType` (617-618), `SliverType` (620-621), `SymbolId` (625-630), `SymbolId::new` (633-636), `SymbolId::primary_sliver_index` (638-641), `SymbolId::secondary_sliver_index` (643-646), `SymbolId::sliver_index` (648-657), `SymbolId::fmt` (661-663), `SymbolId::schema` (668-683), `SymbolId::name` (688-690), `ParseSymbolIdError` (693-698), `SymbolId::Err` (701-701), `SymbolId::from_str` (703-709), `SymbolId::serialize` (713-722), `SymbolId::deserialize` (726-736), `RecoverySymbol` (739-742), `InvalidEncodingType` (753-756), `EncodingTypeForSerde` (768-773), `EncodingType::Error` (788-788), `EncodingType::try_from` (790-796), `EncodingTypeForSerde::from` (801-806), `EncodingType::Error` (817-817), `EncodingType::try_from` (819-825), `EncodingType::Err` (829-829), `EncodingType::from_str` (831-837), `EncodingType::max_symbol_size` (849-855), `EncodingType::is_supported` (857-861), `EncodingType::fmt` (865-870), `InconsistencyProof` (875-881), `InconsistencyProof::verify` (884-894), `SliverId` (959-960), `SliverId::index` (963-966), `SliverId::pair_index` (968-974).
+- **lib.rs:** `PublicKey` (71-72), `NetworkPublicKey` (73-74), `Signature` (75-76), `Certificate` (77-78), `DefaultHashFunction` (79-80), `EpochCount` (83-84), `SUPPORTED_AND_DEFAULT_ENCODING` (86-88), `SUPPORTED_ENCODING_TYPES` (90-91), `DEFAULT_ENCODING` (93-94), `EpochSchema` (98-100), `BlobId::ZERO` (122-123), `BlobId::MAX` (125-126), `BlobId::first_two_bytes` (147-157), `QuiltPatchId` (197-208), `QuiltPatchId::new` (211-217), `QuiltPatchId::to_bytes` (219-225), `QuiltPatchId::from_bytes` (227-235), `QuiltPatchId::zero` (237-243), `QuiltPatchId::version_enum` (245-253), `QuiltPatchId::fmt` (257-259), `QuiltPatchId::fmt` (263-269), `QuiltPatchId::Err` (273-273), `QuiltPatchId::from_str` (275-294), `BlobIdParseError` (297-300), `BlobId::Error` (303-303), `BlobId::try_from` (305-308), `BlobId::Err` (312-312), `BlobId::from_str` (314-321), `SuiObjectId::LENGTH` (336-337), `SuiObjectId::from` (342-344), `SuiObjectId::from` (349-351), `ObjectID::from` (356-358), `ObjectID::from` (363-365), `SuiObjectIdParseError` (368-371), `SuiObjectId::Error` (374-374), `SuiObjectId::try_from` (376-379), `SliverPairIndex::from` (442-444), `SliverIndex::from` (448-450), `SliverIndex::partial_cmp` (454-456), `SliverIndex::eq` (460-462), `SliverIndex::Err` (466-466), `SliverIndex::from_str` (468-470), `SliverIndex::to_pair_index` (495-510), `ShardRange` (519-522), `ShardIndex::range` (525-554), `usize::from` (558-560), `Sliver` (565-568), `Sliver::hash` (571-575), `Sliver::len` (577-580), `Sliver::is_empty` (582-585), `Sliver::verify` (587-597), `Sliver::sliver_index` (599-602), `Sliver::to_raw` (604-611), `DecodingSymbolType` (617-618), `SliverType` (620-621), `SymbolId` (625-630), `SymbolId::new` (633-636), `SymbolId::primary_sliver_index` (638-641), `SymbolId::secondary_sliver_index` (643-646), `SymbolId::sliver_index` (648-657), `SymbolId::fmt` (661-663), `SymbolId::schema` (668-683), `SymbolId::name` (688-690), `ParseSymbolIdError` (693-698), `SymbolId::Err` (701-701), `SymbolId::from_str` (703-709), `SymbolId::serialize` (713-722), `SymbolId::deserialize` (726-736), `RecoverySymbol` (739-742), `EncodingType::is_supported` (857-861), `InconsistencyProof` (875-881), `InconsistencyProof::verify` (884-894), `SliverId` (959-960), `SliverId::index` (963-966), `SliverId::pair_index` (968-974).
 - **messages/storage_confirmation.rs:** `StorageConfirmation` (13-21), `Confirmation::as_ref` (84-86), `SignedStorageConfirmation` (89-90), `SignedStorageConfirmation::verify` (93-106).
 
 ---
