@@ -15,9 +15,10 @@ use std::num::NonZeroU16;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::pybacked::PyBackedBytes;
-use pyo3::types::PyBytes;
+use pyo3::types::{PyBytes, PyList};
 
 use crate::walrus::bls;
+use crate::walrus::vendored::bft;
 use crate::walrus::vendored::core::{BlobId, SuiObjectId};
 use crate::walrus::vendored::encoding::{ReedSolomonEncodingConfig, rotate_pairs};
 use crate::walrus::vendored::messages::{BlobPersistenceType, Confirmation};
@@ -107,7 +108,7 @@ pub struct RedstuffEncodeResult {
     blob_id: [u8; DIGEST_BYTES],
     root_hash: [u8; DIGEST_BYTES],
     metadata_bcs: Vec<u8>,
-    slivers: Vec<Py<RedstuffSliverPair>>,
+    slivers: Py<PyList>,
 }
 
 #[pymethods]
@@ -139,17 +140,26 @@ impl RedstuffEncodeResult {
     }
 
     /// Per-shard sliver pairs, indexed by shard.
+    ///
+    /// Built once at construction and handed out by reference-counted clone, so
+    /// repeated access (e.g. indexing in a per-shard upload loop) is O(1) rather
+    /// than rebuilding the list on every read.
     #[getter]
-    fn slivers(&self, py: Python<'_>) -> Vec<Py<RedstuffSliverPair>> {
-        self.slivers.iter().map(|s| s.clone_ref(py)).collect()
+    fn slivers(&self, py: Python<'_>) -> Py<PyList> {
+        self.slivers.clone_ref(py)
     }
 
-    fn __repr__(&self) -> String {
-        format!("RedstuffEncodeResult(shards={})", self.slivers.len())
+    fn __repr__(&self, py: Python<'_>) -> String {
+        format!("RedstuffEncodeResult(shards={})", self.slivers.bind(py).len())
     }
 }
 
 /// Encodes a blob with RedStuff and returns shard-aligned slivers plus metadata.
+///
+/// `n_shards` must be at least 4: RedStuff needs `max_n_faulty(n_shards) >= 1`
+/// to tolerate any fault, which only holds from 4 shards up. Smaller values
+/// are rejected here rather than left to fail deep inside the vendored
+/// encoder, which panics on an unsupported shard count.
 ///
 /// Upload order is not optional: a storage node rejects every sliver for a blob
 /// until `metadata_bcs` has been PUT to that node, answering 400
@@ -172,6 +182,12 @@ pub fn redstuff_encode(
 ) -> PyResult<RedstuffEncodeResult> {
     let shards = NonZeroU16::new(n_shards)
         .ok_or_else(|| PyValueError::new_err("n_shards must be greater than zero"))?;
+    if bft::max_n_faulty(shards) == 0 {
+        return Err(PyValueError::new_err(format!(
+            "n_shards must be at least 4 (RedStuff requires tolerance for at \
+             least one fault); got {n_shards}"
+        )));
+    }
 
     let raw = py
         .detach(move || -> Result<RawEncoded, String> {
@@ -240,6 +256,7 @@ pub fn redstuff_encode(
             )
         })
         .collect::<PyResult<Vec<_>>>()?;
+    let slivers = PyList::new(py, slivers)?.unbind();
 
     Ok(RedstuffEncodeResult {
         blob_id: raw.blob_id,
@@ -304,7 +321,15 @@ pub fn bls_aggregate<'py>(
 ///
 /// Public keys may be given in either the 96-byte uncompressed or 48-byte
 /// compressed form. Returns `False` for a well-formed signature that does not
-/// verify; raises `ValueError` only when an input cannot be parsed.
+/// verify; raises `ValueError` only when an input cannot be parsed or the
+/// same public key appears more than once.
+///
+/// `public_keys` MUST come from an already-proof-of-possession-validated
+/// source — the on-chain Walrus committee. This function performs no PoP
+/// check itself; passing unvalidated keys permits rogue-key forgery. A
+/// `True` result proves only that the aggregate verifies against exactly
+/// this key set, not that each key's owner actually signed — derive quorum
+/// from on-chain committee membership, not from the length of `public_keys`.
 #[pyfunction]
 pub fn bls_aggregate_verify(
     aggregate_signature: Vec<u8>,
@@ -317,50 +342,16 @@ pub fn bls_aggregate_verify(
 
 /// Verifies a single confirmation signature against one signer's public key.
 ///
+/// Argument order matches `bls_aggregate_verify`: `message` is last.
+///
 /// Returns `False` for a well-formed signature that does not verify; raises
 /// `ValueError` only when an input cannot be parsed.
 #[pyfunction]
 pub fn bls_verify(
     public_key: Vec<u8>,
-    message: Vec<u8>,
     signature: Vec<u8>,
-) -> PyResult<bool> {
-    bls::verify_single(&public_key, &message, &signature)
-        .map_err(|e| PyValueError::new_err(e.to_string()))
-}
-
-/// Generates a throwaway BLS12-381 keypair for tests.
-///
-/// Random keygen only — no BIP-39/BIP-32 derivation; mnemonic-based key
-/// derivation for BLS12381 is architecturally unsupported elsewhere in this
-/// crate (see `validate_path` in `lib.rs`). Walrus committee keys are
-/// generated and held by storage-node operators, never by this library, so
-/// this exists solely to let Python-side tests mint a valid keypair to sign
-/// confirmations against.
-///
-/// Returns `(public, private)`, matching the module's existing
-/// `(..., public, private)` return-order convention.
-#[pyfunction]
-pub fn bls_keygen<'py>(
-    py: Python<'py>,
-) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
-    let (public, private) = bls::generate_keypair();
-    Ok((PyBytes::new(py, &public), PyBytes::new(py, &private)))
-}
-
-/// Signs a message with a raw BLS12-381 private key, for tests.
-///
-/// Reconstructs the keypair directly from the private key bytes rather than
-/// going through `sign_message`/`sign_digest`, which reject BLS12381; pairs
-/// with `bls_keygen` to let tests exercise a genuine sign -> verify /
-/// aggregate round trip.
-#[pyfunction]
-pub fn bls_sign<'py>(
-    py: Python<'py>,
-    private_key: Vec<u8>,
     message: Vec<u8>,
-) -> PyResult<Bound<'py, PyBytes>> {
-    let signature =
-        bls::sign(&private_key, &message).map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(PyBytes::new(py, &signature))
+) -> PyResult<bool> {
+    bls::verify_single(&public_key, &signature, &message)
+        .map_err(|e| PyValueError::new_err(e.to_string()))
 }

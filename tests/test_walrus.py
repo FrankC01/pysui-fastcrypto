@@ -35,6 +35,35 @@ def _b64url_unpadded(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
 
 
+# Fixed BLS12-381 vector: three keypairs signing the same message, generated
+# once via `fastcrypto` directly (the same way `bls.rs`'s own Rust tests do)
+# and hardcoded here. This crate exposes no signing function to Python, so
+# these bytes are the only way the tests below can exercise a genuine
+# verify/aggregate round trip through the FFI boundary. Frozen data, not a
+# protocol vector — it proves the FFI plumbing calls into `fastcrypto`
+# correctly, not anything about Walrus wire-format correctness.
+#
+# To regenerate: `cargo test --lib print_python_test_vector -- --ignored --nocapture`
+# (src/walrus/bls.rs), then paste the printed hex below.
+BLS_MESSAGE = b"walrus storage confirmation"
+BLS_PUBLIC_KEYS = [
+    bytes.fromhex("86fa236e1d74d7f4e0505833258d9cf8109d8c6d0d3f7fdeb5f07124771071ebce15dd95fd9945e421be2263d277f7c4"),
+    bytes.fromhex("ac91600470572da456a0c73ae1693cc3ee1add243fcaa19553f7efc42d5ede059afd3b6fde4da2fc7fd0b2829ac5456b"),
+    bytes.fromhex("8ea3b0269e27b3da4fdeedcfa4c6347d95d463c6b1f4a769babb84d61e5f60f7bbad98c372c20e1556190cc03938530c"),
+]
+# The 96-byte uncompressed encoding of BLS_PUBLIC_KEYS[0] — the same key, the
+# format Walrus actually stores on-chain (`Element<UncompressedG1>`). Derived
+# deterministically from the compressed form above (point decompression is
+# pure math, not randomness), not independently generated.
+BLS_PUBLIC_KEY_0_UNCOMPRESSED = bytes.fromhex("06fa236e1d74d7f4e0505833258d9cf8109d8c6d0d3f7fdeb5f07124771071ebce15dd95fd9945e421be2263d277f7c40610c2b5bded84c3b29cc015d39ce67bf09a7625e0fde5715142f7a0265813d262526c091b6fabfc4b6db8bd345819b8")
+BLS_SIGNATURES = [
+    bytes.fromhex("a07435357105bd9eb10ff17eab5913362cd1fba0b7276d8fbe13cc6503e237ec525c6d002fdd6d554900426c82684e7c049987bb406dd552d7cead8b0222c06be9b2f4096406f9c49967d596ec8b8b17a0d1372d6246725fcd7fc2d6f04d7d61"),
+    bytes.fromhex("8f0b76e592185600ebb090a94f90e29a1f4587a7ea1e409037c66b1c3a6dae7c65597c01e587f77cde06b190235faf6c177f5f93c2ebb5c9d5ef33cf94398219b2954b02d82b6b80ba3730a705175977df727dce5da121fe062cc1c62c8877c9"),
+    bytes.fromhex("8ad418d76193ea319773ab6982d60792598bf6b300c99510ae755462aa9bed15388182423dee9ed6bd54fcb7a4206ec20ee0b7c46f2e367691442a28e01cfa036dfd59de571173da9c30004e62d970b2b171527dfb5df1e28fc88b48c62d1f3e"),
+]
+BLS_AGGREGATE_SIGNATURE = bytes.fromhex("b376c2b75bc3115b9392c2d1d4197dcb9569e5d8820eb51ff1e84e6103378e773a578c965483f1b59b40a12ef988fdf50951e69572849b66259e4ba4717d5e484ab769bfa6b124276d81d7f0b3b8ba866056498abf26916f4581e0d688b29b15")
+
+
 class TestWalrusEncode:
     """Encoding a blob into shard-aligned slivers."""
 
@@ -83,6 +112,20 @@ class TestWalrusEncode:
         expected = [(offset + i) % UPSTREAM_N_SHARDS for i in range(UPSTREAM_N_SHARDS)]
         assert indices == expected
 
+    def test_pair_indices_match_the_blob_id_rotation(self):
+        """Position i is shard i; the pair index at i is (i - k) mod n, k = blob_id mod n.
+
+        Upstream rotates RIGHT by `blob_id` (big-endian) mod n_shards. Asserting the
+        exact permutation — not merely that it IS a rotation — is what catches a
+        direction inversion, which would otherwise send every sliver to the wrong node
+        with no local error. The preceding test only proves SOME rotation happened;
+        this one proves it is the RIGHT one.
+        """
+        result = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        k = int.from_bytes(result.blob_id, "big") % UPSTREAM_N_SHARDS
+        expected = [(i - k) % UPSTREAM_N_SHARDS for i in range(UPSTREAM_N_SHARDS)]
+        assert [s.sliver_pair_index for s in result.slivers] == expected
+
     def test_encoding_is_deterministic(self):
         """The same input must always produce the same blob ID."""
         first = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
@@ -100,6 +143,18 @@ class TestWalrusEncode:
         """n_shards must be positive."""
         with pytest.raises(ValueError):
             pfc.redstuff_encode(UPSTREAM_BLOB, 0)
+
+    @pytest.mark.parametrize("n_shards", [1, 2, 3])
+    def test_below_minimum_shards_rejected(self, n_shards):
+        """n_shards below 4 must raise ValueError, not crash the process.
+
+        Regression for a shard count that satisfied `NonZeroU16` but left
+        `max_n_faulty(n_shards) == 0`, which the vendored encoder handled
+        with an `.expect()` — an uncatchable `PanicException` rather than
+        the `ValueError` the type stub promises.
+        """
+        with pytest.raises(ValueError):
+            pfc.redstuff_encode(UPSTREAM_BLOB, n_shards)
 
 
 class TestWalrusBlobMetadata:
@@ -234,11 +289,11 @@ class TestWalrusBls:
 
     Most cases here cover the Python boundary: argument handling, error
     surfacing, and return types — full aggregation/verification coverage
-    lives in the Rust unit tests. `bls_keygen`/`bls_sign` are
-    test-only helpers (no BIP-39/BIP-32 derivation, and unrelated to
-    `sign_message`/`sign_digest`, which reject BLS12381) that let a few
-    cases here also exercise a genuine sign -> verify/aggregate round trip
-    through the FFI boundary.
+    lives in the Rust unit tests. A handful of cases use a fixed vector
+    (three real keypairs signing the same message, generated once via
+    `fastcrypto` directly and hardcoded above) to exercise a genuine
+    verify/aggregate round trip through the FFI boundary, since this crate
+    exposes no signing function for Python to generate one itself.
     """
 
     @pytest.mark.parametrize("length", [0, 47, 49, 95, 97])
@@ -270,26 +325,66 @@ class TestWalrusBls:
     def test_verify_rejects_malformed_key(self):
         """A malformed public key raises rather than returning False."""
         with pytest.raises(ValueError):
-            pfc.bls_verify(bytes(10), b"message", bytes(96))
+            pfc.bls_verify(bytes(10), bytes(96), b"message")
 
-    def test_keygen_signature_verifies(self):
-        """A genuine keygen'd keypair signs, and the signature verifies."""
-        public, private = pfc.bls_keygen()
-        message = b"walrus storage confirmation"
-        signature = pfc.bls_sign(private, message)
-        assert pfc.bls_verify(public, message, signature)
+    def test_fixed_vector_signature_verifies(self):
+        """A real signature from the fixed vector verifies against its key."""
+        assert pfc.bls_verify(BLS_PUBLIC_KEYS[0], BLS_SIGNATURES[0], BLS_MESSAGE)
 
-    def test_keygen_signature_fails_wrong_message(self):
-        """A genuine signature does not verify against a different message."""
-        public, private = pfc.bls_keygen()
-        signature = pfc.bls_sign(private, b"walrus storage confirmation")
-        assert not pfc.bls_verify(public, b"a different message", signature)
+    def test_fixed_vector_signature_fails_wrong_message(self):
+        """A real signature does not verify against a different message."""
+        assert not pfc.bls_verify(
+            BLS_PUBLIC_KEYS[0], BLS_SIGNATURES[0], b"a different message"
+        )
 
-    def test_keygen_aggregate_verifies(self):
-        """Aggregating genuine signatures over the same message verifies."""
-        message = b"walrus storage confirmation"
-        keypairs = [pfc.bls_keygen() for _ in range(3)]
-        signatures = [pfc.bls_sign(private, message) for _, private in keypairs]
-        aggregate = pfc.bls_aggregate(signatures)
-        public_keys = [public for public, _ in keypairs]
-        assert pfc.bls_aggregate_verify(aggregate, public_keys, message)
+    def test_fixed_vector_aggregate_verifies(self):
+        """Aggregating the fixed vector's signatures over the same message verifies."""
+        aggregate = pfc.bls_aggregate(BLS_SIGNATURES)
+        assert aggregate == BLS_AGGREGATE_SIGNATURE
+        assert pfc.bls_aggregate_verify(aggregate, BLS_PUBLIC_KEYS, BLS_MESSAGE)
+
+    def test_aggregate_verify_rejects_infinity_public_key(self):
+        """Padding the signer set with the point at infinity must not verify.
+
+        The G1 subgroup check alone accepts infinity, since it is itself a
+        subgroup member. Left unguarded, `bls_aggregate_verify` would absorb
+        an infinity "public key" as the additive identity and still return
+        True, letting a caller believe more signers certified a message than
+        actually did.
+        """
+        aggregate = pfc.bls_aggregate([BLS_SIGNATURES[0]])
+        infinity_public_key = bytes([0xC0] + [0] * 47)
+
+        with pytest.raises(ValueError):
+            pfc.bls_aggregate_verify(
+                aggregate, [BLS_PUBLIC_KEYS[0], infinity_public_key], BLS_MESSAGE
+            )
+
+    def test_aggregate_verify_rejects_duplicate_public_key(self):
+        """A duplicated public key must not let one signer count twice."""
+        aggregate = pfc.bls_aggregate([BLS_SIGNATURES[0]])
+
+        with pytest.raises(ValueError):
+            pfc.bls_aggregate_verify(
+                aggregate, [BLS_PUBLIC_KEYS[0], BLS_PUBLIC_KEYS[0]], BLS_MESSAGE
+            )
+
+    def test_g1_compress_maps_uncompressed_onchain_key_to_compressed(self):
+        """The 96-byte on-chain form compresses to the same 48-byte key.
+
+        This is the primary production use case for `bls_g1_compress` — Walrus
+        stores committee keys as `Element<UncompressedG1>` — but every other
+        test in this class exercises only the already-compressed 48-byte form.
+        """
+        assert pfc.bls_g1_compress(BLS_PUBLIC_KEY_0_UNCOMPRESSED) == BLS_PUBLIC_KEYS[0]
+
+    def test_aggregate_verify_accepts_mixed_key_widths(self):
+        """A committee read off-chain may mix key-width encodings across members.
+
+        Proves `bls_aggregate_verify` correctly resolves a 96-byte uncompressed
+        key alongside 48-byte compressed keys for other signers in the same
+        call, rather than only ever being exercised with one width throughout.
+        """
+        aggregate = pfc.bls_aggregate(BLS_SIGNATURES)
+        keys = [BLS_PUBLIC_KEY_0_UNCOMPRESSED, BLS_PUBLIC_KEYS[1], BLS_PUBLIC_KEYS[2]]
+        assert pfc.bls_aggregate_verify(aggregate, keys, BLS_MESSAGE)

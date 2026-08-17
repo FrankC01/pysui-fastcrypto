@@ -152,7 +152,8 @@ def redstuff_encode(blob: bytes, n_shards: int) -> RedstuffEncodeResult:
     supplied buffer without copying it first.
 
     Raises:
-        ValueError: if ``n_shards`` is zero or the blob cannot be encoded.
+        ValueError: if ``n_shards`` is less than 4 (RedStuff requires
+            tolerance for at least one fault) or the blob cannot be encoded.
     """
     ...
 
@@ -201,17 +202,28 @@ def bls_aggregate_verify(
     Public keys may be given in either the 96-byte uncompressed or 48-byte
     compressed form.
 
+    SECURITY CONTRACT: ``public_keys`` must come from an already
+    proof-of-possession-validated source — the on-chain Walrus committee.
+    This function performs no PoP check itself; passing unvalidated keys
+    permits rogue-key forgery. A ``True`` result proves only that the
+    aggregate verifies against exactly this key set, not that each key's
+    real-world owner signed — derive quorum from on-chain committee
+    membership and signer indices, not from ``len(public_keys)``.
+
     Returns:
         ``False`` if the inputs are well formed but the signature does not
         verify.
 
     Raises:
-        ValueError: if the key set is empty or an input cannot be parsed.
+        ValueError: if the key set is empty, contains a duplicate key, or
+            an input cannot be parsed.
     """
     ...
 
-def bls_verify(public_key: bytes, message: bytes, signature: bytes) -> bool:
+def bls_verify(public_key: bytes, signature: bytes, message: bytes) -> bool:
     """Verify a single confirmation signature against one signer's public key.
+
+    Argument order matches ``bls_aggregate_verify``: ``message`` is last.
 
     Returns:
         ``False`` if the inputs are well formed but the signature does not
@@ -219,32 +231,5 @@ def bls_verify(public_key: bytes, message: bytes, signature: bytes) -> bool:
 
     Raises:
         ValueError: if an input cannot be parsed.
-    """
-    ...
-
-def bls_keygen() -> tuple[bytes, bytes]:
-    """Generate a throwaway BLS12-381 keypair for tests.
-
-    Random keygen only — no BIP-39/BIP-32 derivation. Walrus committee keys
-    are generated and held by storage-node operators, never by this
-    library; this exists solely to let tests mint a valid keypair to sign
-    confirmations against.
-
-    Returns:
-        A ``(public, private)`` tuple, matching the module's existing
-        ``(..., public, private)`` return-order convention.
-    """
-    ...
-
-def bls_sign(private_key: bytes, message: bytes) -> bytes:
-    """Sign a message with a raw BLS12-381 private key, for tests.
-
-    Reconstructs the keypair directly from the private key bytes rather than
-    going through ``sign_message``/``sign_digest``, which reject BLS12381.
-    Pairs with :func:`bls_keygen` to exercise a genuine sign ->
-    verify/aggregate round trip.
-
-    Raises:
-        ValueError: if the private key is not a valid BLS12-381 scalar.
     """
     ...

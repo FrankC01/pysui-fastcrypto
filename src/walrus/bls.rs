@@ -16,17 +16,16 @@
 //! yields the same group element, so no G1 subtraction is required to match
 //! on-chain behaviour.
 
+use std::collections::HashSet;
+
 use fastcrypto::bls12381::min_pk::{
     BLS12381AggregateSignature,
-    BLS12381KeyPair,
-    BLS12381PrivateKey,
     BLS12381PublicKey,
     BLS12381Signature,
 };
 use fastcrypto::groups::bls12381::{G1Element, G1ElementUncompressed};
 use fastcrypto::serde_helpers::ToFromByteArray;
-use fastcrypto::traits::{AggregateAuthenticator, KeyPair, Signer, ToFromBytes, VerifyingKey};
-use rand::thread_rng;
+use fastcrypto::traits::{AggregateAuthenticator, ToFromBytes, VerifyingKey};
 use thiserror::Error;
 
 /// Length in bytes of a compressed BLS12-381 G1 public key.
@@ -60,10 +59,6 @@ pub(crate) enum BlsError {
     #[error("invalid BLS12-381 signature encoding")]
     InvalidSignature,
 
-    /// A private key was not a valid BLS12-381 scalar.
-    #[error("invalid BLS12-381 private key encoding")]
-    InvalidPrivateKey,
-
     /// Aggregation was attempted over an empty signature set.
     #[error("cannot aggregate an empty signature set")]
     EmptySignatureSet,
@@ -71,6 +66,10 @@ pub(crate) enum BlsError {
     /// Verification was attempted against an empty public key set.
     #[error("cannot verify against an empty public key set")]
     EmptyPublicKeySet,
+
+    /// The same public key appeared more than once in a signer set.
+    #[error("duplicate public key in signer set")]
+    DuplicatePublicKey,
 
     /// `fastcrypto` rejected the aggregation itself.
     #[error("BLS12-381 signature aggregation failed")]
@@ -84,6 +83,14 @@ pub(crate) enum BlsError {
 /// uncompressed path validates during `G1Element::try_from`, and the compressed
 /// path validates during `G1Element::from_byte_array`. A key that is the right
 /// length but not a valid G1 point is rejected rather than silently accepted.
+///
+/// The point at infinity is itself a member of the G1 subgroup, so the checks
+/// above do not reject it on their own. It is rejected separately below via
+/// `BLS12381PublicKey::validate`, which performs the additional infinity check
+/// `blst_p1_in_g1` alone does not. Without this, an infinity-encoded "public
+/// key" would pass every check here and later be absorbed as the additive
+/// identity by aggregate verification, letting a caller pad a signer list with
+/// infinity keys without changing whether the aggregate verifies.
 pub(crate) fn compress_public_key(
     key_bytes: &[u8],
 ) -> Result<[u8; COMPRESSED_PUBLIC_KEY_LENGTH], BlsError> {
@@ -104,7 +111,11 @@ pub(crate) fn compress_public_key(
         }
         other => return Err(BlsError::PublicKeyLength(other)),
     };
-    Ok(element.to_byte_array())
+    let compressed = element.to_byte_array();
+    BLS12381PublicKey::from_bytes(&compressed)
+        .and_then(|pk| pk.validate())
+        .map_err(|_| BlsError::InvalidPublicKey)?;
+    Ok(compressed)
 }
 
 /// Parses a committee public key of either width into a `fastcrypto` public key.
@@ -112,8 +123,16 @@ pub(crate) fn compress_public_key(
 /// The bytes are subgroup-checked by [`compress_public_key`] before being handed
 /// to `fastcrypto`, whose own `from_bytes` does not perform that check.
 pub(crate) fn parse_public_key(key_bytes: &[u8]) -> Result<BLS12381PublicKey, BlsError> {
-    let compressed = compress_public_key(key_bytes)?;
-    BLS12381PublicKey::from_bytes(&compressed).map_err(|_| BlsError::InvalidPublicKey)
+    public_key_from_compressed(&compress_public_key(key_bytes)?)
+}
+
+/// Builds a `fastcrypto` public key from bytes already validated by
+/// [`compress_public_key`]. Not itself a validation step — callers that have
+/// not already run bytes through `compress_public_key` must not use this.
+fn public_key_from_compressed(
+    compressed: &[u8; COMPRESSED_PUBLIC_KEY_LENGTH],
+) -> Result<BLS12381PublicKey, BlsError> {
+    BLS12381PublicKey::from_bytes(compressed).map_err(|_| BlsError::InvalidPublicKey)
 }
 
 /// Parses a 96-byte BLS12-381 `min_pk` signature.
@@ -141,7 +160,28 @@ pub(crate) fn aggregate_signatures(signatures: &[Vec<u8>]) -> Result<Vec<u8>, Bl
 /// Verifies an aggregate signature over one message against a set of signers.
 ///
 /// All Walrus confirmation signers sign the identical BCS-encoded `Confirmation`,
-/// so this is same-message aggregate verification.
+/// so this is same-message aggregate verification using fastcrypto's basic
+/// (non-proof-of-possession) scheme.
+///
+/// SECURITY CONTRACT: this function performs no proof-of-possession check.
+/// `public_keys` MUST come from an already-PoP-validated source — the
+/// on-chain Walrus committee, which validates each member's proof of
+/// possession at registration. Passing attacker-influenced keys that were
+/// never PoP-checked permits rogue-key forgery: an attacker who can insert
+/// a crafted key into the set can produce an aggregate that verifies without
+/// every listed signer actually having signed.
+///
+/// A `true` result attests only that the aggregate verifies against exactly
+/// this key set — it is not proof that each key's real-world owner signed.
+/// Callers must derive quorum/weight from on-chain committee membership and
+/// signer indices, not from `public_keys.len()`.
+///
+/// Rejects a `public_keys` list containing the same key more than once
+/// (`Err(BlsError::DuplicatePublicKey)`), comparing keys by their canonical
+/// 48-byte compressed form so the same key given once compressed and once
+/// uncompressed is still caught. Without this, a duplicated key would let
+/// one real signature count as if multiple signers had certified the
+/// message.
 ///
 /// Returns `Ok(false)` when the inputs are well-formed but the signature does not
 /// verify, and `Err` only when an input could not be parsed.
@@ -158,52 +198,34 @@ pub(crate) fn aggregate_verify(
     }
     let aggregate = BLS12381AggregateSignature::from_bytes(aggregate_signature)
         .map_err(|_| BlsError::InvalidSignature)?;
-    let keys = public_keys
-        .iter()
-        .map(|bytes| parse_public_key(bytes))
-        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut seen = HashSet::with_capacity(public_keys.len());
+    let mut keys = Vec::with_capacity(public_keys.len());
+    for bytes in public_keys {
+        let compressed = compress_public_key(bytes)?;
+        if !seen.insert(compressed) {
+            return Err(BlsError::DuplicatePublicKey);
+        }
+        keys.push(public_key_from_compressed(&compressed)?);
+    }
+
     Ok(aggregate.verify(&keys, message).is_ok())
 }
 
 /// Verifies a single confirmation signature against one signer's public key.
 ///
+/// Argument order matches `aggregate_verify`: `message` is last.
+///
 /// Returns `Ok(false)` when the inputs are well-formed but the signature does not
 /// verify, and `Err` only when an input could not be parsed.
 pub(crate) fn verify_single(
     public_key: &[u8],
-    message: &[u8],
     signature: &[u8],
+    message: &[u8],
 ) -> Result<bool, BlsError> {
     let key = parse_public_key(public_key)?;
     let parsed = parse_signature(signature)?;
     Ok(key.verify(message, &parsed).is_ok())
-}
-
-/// Generates a throwaway BLS12-381 keypair for tests.
-///
-/// Random keygen only — no BIP-39/BIP-32 derivation. Mnemonic-based
-/// derivation for BLS12381 is architecturally unsupported elsewhere in this
-/// crate; Walrus committee keys are generated and held by storage-node
-/// operators, never by this library. This exists solely to let tests mint a
-/// valid keypair to sign confirmations against.
-///
-/// Returns `(public, private)` raw bytes.
-pub(crate) fn generate_keypair() -> (Vec<u8>, Vec<u8>) {
-    let kp = BLS12381KeyPair::generate(&mut thread_rng());
-    let public = kp.public().as_ref().to_vec();
-    let private = kp.private().as_ref().to_vec();
-    (public, private)
-}
-
-/// Signs a message with a raw BLS12-381 private key, for tests.
-///
-/// Reconstructs the keypair directly from the private key bytes, bypassing
-/// `kp_from_bytes`/`SuiKeyPair` entirely, so it is unaffected by the
-/// BLS12381 signing/derivation restriction elsewhere in this crate.
-pub(crate) fn sign(private_key: &[u8], message: &[u8]) -> Result<Vec<u8>, BlsError> {
-    let sk = BLS12381PrivateKey::from_bytes(private_key).map_err(|_| BlsError::InvalidPrivateKey)?;
-    let kp = BLS12381KeyPair::from(sk);
-    Ok(kp.sign(message).as_ref().to_vec())
 }
 
 #[cfg(test)]
@@ -271,6 +293,64 @@ mod tests {
     }
 
     #[test]
+    fn compress_rejects_point_at_infinity() {
+        // 0xc0 = compression flag set + infinity flag set; the remaining bytes
+        // of an encoded infinity point are always zero. The G1 subgroup check
+        // alone accepts this, since infinity is itself a subgroup member —
+        // this must be caught by the separate `validate()` call.
+        let mut compressed_infinity = [0u8; COMPRESSED_PUBLIC_KEY_LENGTH];
+        compressed_infinity[0] = 0xc0;
+        assert!(matches!(
+            compress_public_key(&compressed_infinity),
+            Err(BlsError::InvalidPublicKey)
+        ));
+
+        // 0x40 = infinity flag set, no compression flag, in the 96-byte form.
+        let mut uncompressed_infinity = [0u8; UNCOMPRESSED_PUBLIC_KEY_LENGTH];
+        uncompressed_infinity[0] = 0x40;
+        assert!(matches!(
+            compress_public_key(&uncompressed_infinity),
+            Err(BlsError::InvalidPublicKey)
+        ));
+    }
+
+    #[test]
+    fn aggregate_verify_rejects_point_at_infinity_in_signer_set() {
+        // Regression for H-1: padding a signer list with an infinity-encoded
+        // "public key" must not let the aggregate verify as if only the real
+        // signer had been listed.
+        let message = b"walrus storage confirmation";
+        let kp = keypair();
+        let sig_bytes = kp.sign(message).as_ref().to_vec();
+        let pk_bytes = kp.public().as_ref().to_vec();
+        let aggregate = aggregate_signatures(&[sig_bytes]).expect("aggregate");
+
+        let mut infinity = vec![0u8; COMPRESSED_PUBLIC_KEY_LENGTH];
+        infinity[0] = 0xc0;
+
+        assert!(matches!(
+            aggregate_verify(&aggregate, &[pk_bytes, infinity], message),
+            Err(BlsError::InvalidPublicKey)
+        ));
+    }
+
+    #[test]
+    fn aggregate_verify_rejects_duplicate_public_key() {
+        // Regression for M-4: a duplicated key must not let one real
+        // signature be counted as if two signers had certified the message.
+        let message = b"walrus storage confirmation";
+        let kp = keypair();
+        let sig_bytes = kp.sign(message).as_ref().to_vec();
+        let pk_bytes = kp.public().as_ref().to_vec();
+        let aggregate = aggregate_signatures(&[sig_bytes]).expect("aggregate");
+
+        assert!(matches!(
+            aggregate_verify(&aggregate, &[pk_bytes.clone(), pk_bytes], message),
+            Err(BlsError::DuplicatePublicKey)
+        ));
+    }
+
+    #[test]
     fn single_signature_verifies() {
         let kp = keypair();
         let message = b"walrus storage confirmation";
@@ -278,8 +358,8 @@ mod tests {
         let pk_bytes = kp.public().as_ref().to_vec();
         let sig_bytes = signature.as_ref().to_vec();
 
-        assert!(verify_single(&pk_bytes, message, &sig_bytes).expect("verify"));
-        assert!(!verify_single(&pk_bytes, b"different message", &sig_bytes).expect("verify"));
+        assert!(verify_single(&pk_bytes, &sig_bytes, message).expect("verify"));
+        assert!(!verify_single(&pk_bytes, &sig_bytes, b"different message").expect("verify"));
     }
 
     #[test]
@@ -308,5 +388,39 @@ mod tests {
             aggregate_verify(&[0u8; SIGNATURE_LENGTH], &[], b"m"),
             Err(BlsError::EmptyPublicKeySet)
         ));
+    }
+
+    /// Regenerates the fixed vector hardcoded in `tests/test_walrus.py`
+    /// (`BLS_MESSAGE`, `BLS_PUBLIC_KEYS`, `BLS_PUBLIC_KEY_0_UNCOMPRESSED`,
+    /// `BLS_SIGNATURES`, `BLS_AGGREGATE_SIGNATURE`). Run with:
+    /// `cargo test --lib print_python_test_vector -- --ignored --nocapture`
+    #[test]
+    #[ignore = "generator, not an assertion — prints the vector for tests/test_walrus.py"]
+    fn print_python_test_vector() {
+        fn to_hex(bytes: &[u8]) -> String {
+            bytes.iter().map(|b| format!("{:02x}", b)).collect()
+        }
+
+        let message = b"walrus storage confirmation";
+        let kps: Vec<_> = (0..3).map(|_| keypair()).collect();
+        let signatures: Vec<Vec<u8>> =
+            kps.iter().map(|kp| kp.sign(message).as_ref().to_vec()).collect();
+        let public_keys: Vec<Vec<u8>> =
+            kps.iter().map(|kp| kp.public().as_ref().to_vec()).collect();
+        let aggregate = aggregate_signatures(&signatures).expect("aggregate");
+
+        let compressed_pk0: [u8; COMPRESSED_PUBLIC_KEY_LENGTH] =
+            public_keys[0].clone().try_into().expect("48 bytes");
+        let element = G1Element::from_byte_array(&compressed_pk0).expect("valid point");
+        let uncompressed_pk0 = G1ElementUncompressed::from(&element).into_byte_array();
+
+        println!("BLS_PUBLIC_KEYS[0]           = {}", to_hex(&public_keys[0]));
+        println!("BLS_PUBLIC_KEYS[1]           = {}", to_hex(&public_keys[1]));
+        println!("BLS_PUBLIC_KEYS[2]           = {}", to_hex(&public_keys[2]));
+        println!("BLS_PUBLIC_KEY_0_UNCOMPRESSED = {}", to_hex(&uncompressed_pk0));
+        println!("BLS_SIGNATURES[0]            = {}", to_hex(&signatures[0]));
+        println!("BLS_SIGNATURES[1]            = {}", to_hex(&signatures[1]));
+        println!("BLS_SIGNATURES[2]            = {}", to_hex(&signatures[2]));
+        println!("BLS_AGGREGATE_SIGNATURE      = {}", to_hex(&aggregate));
     }
 }

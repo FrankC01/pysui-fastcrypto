@@ -18,6 +18,9 @@ classifiers = [
   "Programming Language :: Python",
 ]
 
+[project.optional-dependencies]
+test = ["pytest>=9.0.3"]
+
 [project.urls]
 homepage = "https://github.com/FrankC01/pysui-fastcrypto"
 repository = "https://github.com/FrankC01/pysui-fastcrypto"

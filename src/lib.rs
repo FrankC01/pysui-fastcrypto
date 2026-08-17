@@ -31,8 +31,6 @@ use crate::walrus::ffi::{
     RedstuffSliverPair,
     bls_aggregate,
     bls_aggregate_verify,
-    bls_keygen,
-    bls_sign,
     bls_verify,
     bls_confirmation_bytes,
     redstuff_encode,
@@ -574,8 +572,6 @@ fn pysui_fastcrypto(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(bls_aggregate, m)?)?;
     m.add_function(wrap_pyfunction!(bls_aggregate_verify, m)?)?;
     m.add_function(wrap_pyfunction!(bls_verify, m)?)?;
-    m.add_function(wrap_pyfunction!(bls_keygen, m)?)?;
-    m.add_function(wrap_pyfunction!(bls_sign, m)?)?;
     Ok(())
 }
 
