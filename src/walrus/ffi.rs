@@ -156,10 +156,25 @@ impl RedstuffEncodeResult {
 
 /// Encodes a blob with RedStuff and returns shard-aligned slivers plus metadata.
 ///
+/// SECURITY CONTRACT: `n_shards` MUST come from an on-chain-sourced Walrus
+/// committee, never from untrusted or attacker-influenced input. This function
+/// validates only that `n_shards >= 4`; cost scales with `n_shards^2` (symbol
+/// hashing), so an attacker-chosen value near the u16 ceiling (65535) can consume
+/// CPU for an extended, uninterruptible period even though no real Walrus network
+/// would ever produce such a value. The only n_shards in production today
+/// (mainnet and testnet) is 1000.
+///
 /// `n_shards` must be at least 4: RedStuff needs `max_n_faulty(n_shards) >= 1`
 /// to tolerate any fault, which only holds from 4 shards up. Smaller values
 /// are rejected here rather than left to fail deep inside the vendored
 /// encoder, which panics on an unsupported shard count.
+///
+/// An empty blob (`blob = b""`) is accepted, not rejected: upstream Walrus
+/// treats a 0-byte input as a 1-byte symbol size, in both the Rust encoder
+/// (`data_length.max(1)`) and the `redstuff.move` on-chain contract
+/// (`if (unencoded_length == 0) { unencoded_length = 1; }`), each with a
+/// dedicated zero-size test. This is deliberate upstream behavior, not an
+/// oversight here.
 ///
 /// Upload order is not optional: a storage node rejects every sliver for a blob
 /// until `metadata_bcs` has been PUT to that node, answering 400
@@ -167,12 +182,15 @@ impl RedstuffEncodeResult {
 /// node, then that node's slivers.
 ///
 /// The GIL is released for the whole encode, which is CPU-bound and can be long
-/// for large blobs. The input is read through the Python buffer rather than
-/// copied first.
+/// for large blobs. A `bytes` input is read zero-copy through the Python buffer;
+/// a `bytearray` (or other mutable buffer-protocol object) is copied into an
+/// owned `bytes` during argument extraction, since the zero-copy path requires
+/// an immutable backing to safely cross the GIL release.
 ///
-/// Peak memory is roughly 5.5x the blob size: RedStuff expands by ~4.5x, and the
-/// source blob stays resident alongside the encoded slivers. A 1 GiB blob needs
-/// about 6 GB.
+/// Peak memory is roughly 5.5x the blob size for `bytes` input (RedStuff expands
+/// by ~4.5x, and the source blob stays resident alongside the encoded slivers).
+/// For `bytearray` input, add one more full copy of the blob: roughly 6.5x. A
+/// 1 GiB blob needs about 6 GB (`bytes`) or 7 GB (`bytearray`).
 #[pyfunction]
 #[pyo3(signature = (blob, n_shards))]
 pub fn redstuff_encode(
@@ -271,6 +289,9 @@ pub fn redstuff_encode(
 /// Pass `object_id` for a deletable blob, or omit it for a permanent one. The
 /// result is the BCS-encoded `Confirmation`: 40 bytes permanent, 72 deletable.
 /// Verifying a confirmation signature requires these exact bytes.
+///
+/// `epoch` is `u32`; PyO3 raises `OverflowError` (not `ValueError`) if a
+/// negative value or one exceeding `u32::MAX` is passed.
 #[pyfunction]
 #[pyo3(signature = (epoch, blob_id, object_id = None))]
 pub fn bls_confirmation_bytes<'py>(
@@ -295,25 +316,38 @@ pub fn bls_confirmation_bytes<'py>(
 /// Converts a committee public key to its 48-byte compressed form.
 ///
 /// Accepts the 96-byte uncompressed encoding stored on-chain or an
-/// already-compressed 48-byte key. Both are subgroup-checked.
+/// already-compressed 48-byte key. Both are subgroup-checked, and the
+/// point at infinity is explicitly rejected — it is itself a valid G1
+/// subgroup member, so subgroup-checking alone would accept it.
+///
+/// On failure, `ValueError.args` is `(code, message)`: `code` is a stable
+/// machine-matchable string (`"public_key_length"` or `"invalid_public_key"`),
+/// `message` is the human-readable description. Match on `code`, not the
+/// message text, which is not a stability contract.
 #[pyfunction]
+#[pyo3(signature = (public_key))]
 pub fn bls_g1_compress<'py>(
     py: Python<'py>,
     public_key: Vec<u8>,
 ) -> PyResult<Bound<'py, PyBytes>> {
-    let compressed =
-        bls::compress_public_key(&public_key).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let compressed = bls::compress_public_key(&public_key)
+        .map_err(|e| PyValueError::new_err((e.code(), e.to_string())))?;
     Ok(PyBytes::new(py, &compressed))
 }
 
 /// Aggregates confirmation signatures into a single 96-byte signature.
+///
+/// On failure, `ValueError.args` is `(code, message)`: `code` is one of
+/// `"empty_signature_set"`, `"signature_length"`, `"invalid_signature"`,
+/// `"aggregation_failed"`. Match on `code`, not the message text.
 #[pyfunction]
+#[pyo3(signature = (signatures))]
 pub fn bls_aggregate<'py>(
     py: Python<'py>,
     signatures: Vec<Vec<u8>>,
 ) -> PyResult<Bound<'py, PyBytes>> {
     let aggregate = bls::aggregate_signatures(&signatures)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        .map_err(|e| PyValueError::new_err((e.code(), e.to_string())))?;
     Ok(PyBytes::new(py, &aggregate))
 }
 
@@ -330,14 +364,20 @@ pub fn bls_aggregate<'py>(
 /// `True` result proves only that the aggregate verifies against exactly
 /// this key set, not that each key's owner actually signed — derive quorum
 /// from on-chain committee membership, not from the length of `public_keys`.
+///
+/// On failure, `ValueError.args` is `(code, message)`: `code` is one of
+/// `"empty_public_key_set"`, `"public_key_length"`, `"invalid_public_key"`,
+/// `"signature_length"`, `"invalid_signature"`, `"duplicate_public_key"`.
+/// Match on `code`, not the message text.
 #[pyfunction]
+#[pyo3(signature = (aggregate_signature, public_keys, message))]
 pub fn bls_aggregate_verify(
     aggregate_signature: Vec<u8>,
     public_keys: Vec<Vec<u8>>,
     message: Vec<u8>,
 ) -> PyResult<bool> {
     bls::aggregate_verify(&aggregate_signature, &public_keys, &message)
-        .map_err(|e| PyValueError::new_err(e.to_string()))
+        .map_err(|e| PyValueError::new_err((e.code(), e.to_string())))
 }
 
 /// Verifies a single confirmation signature against one signer's public key.
@@ -346,12 +386,17 @@ pub fn bls_aggregate_verify(
 ///
 /// Returns `False` for a well-formed signature that does not verify; raises
 /// `ValueError` only when an input cannot be parsed.
+///
+/// On failure, `ValueError.args` is `(code, message)`: `code` is one of
+/// `"public_key_length"`, `"invalid_public_key"`, `"signature_length"`,
+/// `"invalid_signature"`. Match on `code`, not the message text.
 #[pyfunction]
+#[pyo3(signature = (public_key, signature, message))]
 pub fn bls_verify(
     public_key: Vec<u8>,
     signature: Vec<u8>,
     message: Vec<u8>,
 ) -> PyResult<bool> {
     bls::verify_single(&public_key, &signature, &message)
-        .map_err(|e| PyValueError::new_err(e.to_string()))
+        .map_err(|e| PyValueError::new_err((e.code(), e.to_string())))
 }

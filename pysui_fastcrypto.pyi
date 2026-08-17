@@ -148,8 +148,16 @@ class RedstuffEncodeResult:
 def redstuff_encode(blob: bytes, n_shards: int) -> RedstuffEncodeResult:
     """Encode a blob with RedStuff, returning shard-aligned slivers and metadata.
 
-    Releases the GIL for the duration of the encode and reads through the
-    supplied buffer without copying it first.
+    SECURITY CONTRACT: n_shards MUST come from an on-chain-sourced Walrus
+    committee, never from untrusted or caller-supplied input. Cost scales with
+    n_shards^2, so an attacker-controlled value near the u16 ceiling (65535) can
+    consume CPU for an extended, uninterruptible period. The only n_shards value
+    in production today (mainnet and testnet) is 1000.
+
+    Releases the GIL for the duration of the encode. A ``bytes`` input is read
+    zero-copy through the Python buffer (peak memory ~5.5x the blob size). A
+    ``bytearray`` is copied into an owned buffer first, since the zero-copy path
+    requires an immutable backing (peak memory ~6.5x the blob size).
 
     Raises:
         ValueError: if ``n_shards`` is less than 4 (RedStuff requires
@@ -170,6 +178,8 @@ def bls_confirmation_bytes(
 
     Raises:
         ValueError: if ``blob_id`` or ``object_id`` is not exactly 32 bytes.
+        OverflowError: if ``epoch`` is negative or exceeds a 32-bit unsigned
+            range — the underlying type is ``u32``.
     """
     ...
 
@@ -177,10 +187,16 @@ def bls_g1_compress(public_key: bytes) -> bytes:
     """Convert a committee public key to its 48-byte compressed form.
 
     Accepts the 96-byte uncompressed encoding stored on-chain or an
-    already-compressed 48-byte key. Both are subgroup-checked.
+    already-compressed 48-byte key. Both are subgroup-checked, and the
+    point at infinity is explicitly rejected — it is itself a valid G1
+    subgroup member, so subgroup-checking alone would accept it.
 
     Raises:
-        ValueError: if the key is neither width, or is not a valid G1 point.
+        ValueError: if the key is neither width, is not a valid G1 point,
+            or is the point at infinity. ``exc.args`` is ``(code, message)``,
+            where ``code`` is ``"public_key_length"`` or
+            ``"invalid_public_key"``. Match on ``code``, not the message
+            text, which is not a stability contract.
     """
     ...
 
@@ -189,6 +205,10 @@ def bls_aggregate(signatures: list[bytes]) -> bytes:
 
     Raises:
         ValueError: if the list is empty or any signature is malformed.
+            ``exc.args`` is ``(code, message)``, where ``code`` is one of
+            ``"empty_signature_set"``, ``"signature_length"``,
+            ``"invalid_signature"``, ``"aggregation_failed"``. Match on
+            ``code``, not the message text.
     """
     ...
 
@@ -216,7 +236,12 @@ def bls_aggregate_verify(
 
     Raises:
         ValueError: if the key set is empty, contains a duplicate key, or
-            an input cannot be parsed.
+            an input cannot be parsed. ``exc.args`` is ``(code, message)``,
+            where ``code`` is one of ``"empty_public_key_set"``,
+            ``"public_key_length"``, ``"invalid_public_key"``,
+            ``"signature_length"``, ``"invalid_signature"``,
+            ``"duplicate_public_key"``. Match on ``code``, not the message
+            text.
     """
     ...
 
@@ -230,6 +255,10 @@ def bls_verify(public_key: bytes, signature: bytes, message: bytes) -> bool:
         verify.
 
     Raises:
-        ValueError: if an input cannot be parsed.
+        ValueError: if an input cannot be parsed. ``exc.args`` is
+            ``(code, message)``, where ``code`` is one of
+            ``"public_key_length"``, ``"invalid_public_key"``,
+            ``"signature_length"``, ``"invalid_signature"``. Match on
+            ``code``, not the message text.
     """
     ...

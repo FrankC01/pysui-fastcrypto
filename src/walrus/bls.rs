@@ -76,6 +76,25 @@ pub(crate) enum BlsError {
     AggregationFailed,
 }
 
+impl BlsError {
+    /// Stable, machine-matchable identifier for this variant. Exposed as
+    /// `exc.args[0]` when this error crosses into Python; `to_string()`
+    /// (the human-readable message) is `exc.args[1]`. Match on this code,
+    /// not the message text, which is not a stability contract.
+    pub(crate) fn code(&self) -> &'static str {
+        match self {
+            BlsError::PublicKeyLength(_) => "public_key_length",
+            BlsError::SignatureLength(_) => "signature_length",
+            BlsError::InvalidPublicKey => "invalid_public_key",
+            BlsError::InvalidSignature => "invalid_signature",
+            BlsError::EmptySignatureSet => "empty_signature_set",
+            BlsError::EmptyPublicKeySet => "empty_public_key_set",
+            BlsError::DuplicatePublicKey => "duplicate_public_key",
+            BlsError::AggregationFailed => "aggregation_failed",
+        }
+    }
+}
+
 /// Converts a Walrus committee public key to its 48-byte compressed form.
 ///
 /// Accepts either the 96-byte uncompressed encoding used on-chain or an

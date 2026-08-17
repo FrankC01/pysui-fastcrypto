@@ -156,6 +156,30 @@ class TestWalrusEncode:
         with pytest.raises(ValueError):
             pfc.redstuff_encode(UPSTREAM_BLOB, n_shards)
 
+    def test_minimum_shards_boundary_succeeds(self):
+        """n_shards=4 is the smallest value RedStuff tolerates; it must succeed.
+
+        Boundary check for the rejection threshold enforced by
+        test_below_minimum_shards_rejected — 4 is the first value where
+        max_n_faulty(n_shards) >= 1.
+        """
+        result = pfc.redstuff_encode(UPSTREAM_BLOB, 4)
+        assert len(result.slivers) == 4
+
+    def test_empty_blob_succeeds(self):
+        """An empty blob is a deliberately supported edge case, not an oversight.
+
+        Upstream Walrus treats a 0-byte blob as a 1-byte symbol size (both
+        the Rust encoder and the Move `redstuff.move` contract clamp
+        `unencoded_length` to 1 when it's 0, each with their own dedicated
+        zero-size test) — this pins the same behavior here.
+        """
+        result = pfc.redstuff_encode(b"", UPSTREAM_N_SHARDS)
+        assert len(result.slivers) == UPSTREAM_N_SHARDS
+        for sliver in result.slivers:
+            assert len(sliver.primary) > 0
+            assert len(sliver.secondary) > 0
+
 
 class TestWalrusBlobMetadata:
     """The BCS metadata body a node requires before it accepts any sliver."""
