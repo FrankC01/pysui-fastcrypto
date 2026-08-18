@@ -1,0 +1,5 @@
+{
+    "pylint.args": [
+        "--extension-pkg-allow-list=pysui_fastcrypto"
+    ]
+}

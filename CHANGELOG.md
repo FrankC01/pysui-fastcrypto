@@ -5,13 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.7.6] - Unpublished
+## [0.7.6] - 2026-08-18
 
 ### Added
+
+- `redstuff_encode` — RedStuff erasure-encodes a blob into shard-aligned slivers and BCS metadata
+- `bls_confirmation_bytes` — exact bytes a Walrus storage node signs for a blob confirmation
+- `bls_g1_compress` — compress a 96-byte uncompressed G1 public key to 48 bytes
+- `bls_aggregate` — aggregate BLS12-381 confirmation signatures into one signature
+- `bls_aggregate_verify` — verify an aggregate BLS12-381 signature over a shared message
+- `bls_verify` — verify a single BLS12-381 signature
 
 ### Fixed
 
 ### Changed
+
+- GitHub Actions now publish platform wheels directly to PyPI via Trusted Publishing (OIDC)
 
 ### Removed
 

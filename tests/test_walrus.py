@@ -46,6 +46,7 @@ def _b64url_unpadded(raw: bytes) -> str:
 # To regenerate: `cargo test --lib print_python_test_vector -- --ignored --nocapture`
 # (src/walrus/bls.rs), then paste the printed hex below.
 BLS_MESSAGE = b"walrus storage confirmation"
+# pylint: disable=line-too-long
 BLS_PUBLIC_KEYS = [
     bytes.fromhex("86fa236e1d74d7f4e0505833258d9cf8109d8c6d0d3f7fdeb5f07124771071ebce15dd95fd9945e421be2263d277f7c4"),
     bytes.fromhex("ac91600470572da456a0c73ae1693cc3ee1add243fcaa19553f7efc42d5ede059afd3b6fde4da2fc7fd0b2829ac5456b"),
@@ -62,6 +63,7 @@ BLS_SIGNATURES = [
     bytes.fromhex("8ad418d76193ea319773ab6982d60792598bf6b300c99510ae755462aa9bed15388182423dee9ed6bd54fcb7a4206ec20ee0b7c46f2e367691442a28e01cfa036dfd59de571173da9c30004e62d970b2b171527dfb5df1e28fc88b48c62d1f3e"),
 ]
 BLS_AGGREGATE_SIGNATURE = bytes.fromhex("b376c2b75bc3115b9392c2d1d4197dcb9569e5d8820eb51ff1e84e6103378e773a578c965483f1b59b40a12ef988fdf50951e69572849b66259e4ba4717d5e484ab769bfa6b124276d81d7f0b3b8ba866056498abf26916f4581e0d688b29b15")
+# pylint: enable=line-too-long
 
 
 class TestWalrusEncode:
@@ -145,7 +147,7 @@ class TestWalrusEncode:
             pfc.redstuff_encode(UPSTREAM_BLOB, 0)
 
     @pytest.mark.parametrize("n_shards", [1, 2, 3])
-    def test_below_minimum_shards_rejected(self, n_shards):
+    def test_below_minimum_shards_rejected(self, n_shards: int):
         """n_shards below 4 must raise ValueError, not crash the process.
 
         Regression for a shard count that satisfied `NonZeroU16` but left
@@ -296,13 +298,13 @@ class TestWalrusConfirmationBytes:
         assert first != second
 
     @pytest.mark.parametrize("length", [0, 31, 33, 64])
-    def test_bad_blob_id_length_rejected(self, length):
+    def test_bad_blob_id_length_rejected(self, length: int):
         """blob_id must be exactly 32 bytes."""
         with pytest.raises(ValueError):
             pfc.bls_confirmation_bytes(self.EPOCH, bytes(length))
 
     @pytest.mark.parametrize("length", [0, 31, 33])
-    def test_bad_object_id_length_rejected(self, length):
+    def test_bad_object_id_length_rejected(self, length: int):
         """object_id must be exactly 32 bytes when supplied."""
         with pytest.raises(ValueError):
             pfc.bls_confirmation_bytes(self.EPOCH, self.BLOB_ID, bytes(length))
@@ -321,7 +323,7 @@ class TestWalrusBls:
     """
 
     @pytest.mark.parametrize("length", [0, 47, 49, 95, 97])
-    def test_g1_compress_rejects_wrong_width(self, length):
+    def test_g1_compress_rejects_wrong_width(self, length: int):
         """Only 48-byte compressed or 96-byte uncompressed keys are accepted."""
         with pytest.raises(ValueError):
             pfc.bls_g1_compress(bytes(length))
