@@ -14,7 +14,7 @@
 //     nothing in the encode/confirmation path calls them.
 //   * `InvalidIntent` is vendored because `Confirmation`'s
 //     `#[serde(try_from = ...)]` attribute requires the `TryFrom` impl that
-//     returns it. The manifest did not list it; see the handoff.
+//     returns it. Now recorded in the manifest's `messages.rs` table.
 //   * Upstream is `#![no_std]` and imports from `alloc`; this crate is std,
 //     so those imports are dropped.
 //   * Upstream `#[cfg(test)]` code omitted.

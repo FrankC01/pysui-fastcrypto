@@ -1,3 +1,7 @@
+import ast
+import pathlib
+import types
+
 import pytest
 import pysui_fastcrypto as fc
 
@@ -228,3 +232,60 @@ class TestErrors:
             assert result is False
         except ValueError:
             pass
+
+
+class TestTypeStubParity:
+    """The hand-maintained ``.pyi`` must describe exactly the shipped surface.
+
+    ``CLAUDE.md`` requires the stub to be updated in the same commit as any
+    public API change, but nothing enforced that: the extension is compiled, the
+    stub is written by hand, and drift between them is silent. A caller then
+    gets no completion for a real function, or a type error for one that does
+    not exist.
+
+    This checks names and existence only. Signature drift is NOT detectable — a
+    compiled extension exposes no introspectable signature to compare against —
+    so a stub whose parameters have gone stale still passes here.
+    """
+
+    @staticmethod
+    def _stub_surface() -> set[str]:
+        """Top-level function and class names declared in the type stub."""
+        stub_path = pathlib.Path(__file__).resolve().parent.parent / "pysui_fastcrypto.pyi"
+        tree = ast.parse(stub_path.read_text(encoding="utf-8"))
+        return {
+            node.name
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef))
+        }
+
+    @staticmethod
+    def _module_surface() -> set[str]:
+        """Public names the built extension actually exposes.
+
+        Submodules are excluded. Maturin's package layout puts the compiled
+        extension inside a package of the same name, so ``dir()`` reports a
+        nested ``pysui_fastcrypto`` module — that is packaging structure, not
+        API surface, and it has no business in a type stub.
+        """
+        return {
+            name
+            for name in dir(fc)
+            if not name.startswith("_")
+            and not isinstance(getattr(fc, name), types.ModuleType)
+        }
+
+    def test_every_export_is_stubbed(self):
+        """A new export without a stub entry fails here.
+
+        This also catches an export that was written and stubbed but never
+        registered in the ``#[pymodule]`` block, since the comparison runs
+        against the imported module rather than against the Rust source.
+        """
+        missing = self._module_surface() - self._stub_surface()
+        assert not missing, f"exported but missing from pysui_fastcrypto.pyi: {sorted(missing)}"
+
+    def test_every_stub_entry_is_exported(self):
+        """A stub for a removed or misspelled export fails here."""
+        extra = self._stub_surface() - self._module_surface()
+        assert not extra, f"stubbed but not exported by the module: {sorted(extra)}"

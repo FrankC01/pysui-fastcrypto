@@ -19,9 +19,7 @@
 use std::collections::HashSet;
 
 use fastcrypto::bls12381::min_pk::{
-    BLS12381AggregateSignature,
-    BLS12381PublicKey,
-    BLS12381Signature,
+    BLS12381AggregateSignature, BLS12381PublicKey, BLS12381Signature,
 };
 use fastcrypto::groups::bls12381::{G1Element, G1ElementUncompressed};
 use fastcrypto::serde_helpers::ToFromByteArray;
@@ -171,8 +169,8 @@ pub(crate) fn aggregate_signatures(signatures: &[Vec<u8>]) -> Result<Vec<u8>, Bl
         .iter()
         .map(|bytes| parse_signature(bytes))
         .collect::<Result<Vec<_>, _>>()?;
-    let aggregate = BLS12381AggregateSignature::aggregate(&parsed)
-        .map_err(|_| BlsError::AggregationFailed)?;
+    let aggregate =
+        BLS12381AggregateSignature::aggregate(&parsed).map_err(|_| BlsError::AggregationFailed)?;
     Ok(aggregate.as_ref().to_vec())
 }
 
@@ -267,13 +265,8 @@ mod tests {
 
         // Produce the 96-byte on-chain form using fastcrypto's own inverse, then
         // confirm our conversion recovers the identical compressed bytes.
-        let element = G1Element::from_byte_array(
-            &compressed
-                .clone()
-                .try_into()
-                .expect("48 bytes"),
-        )
-        .expect("valid point");
+        let element = G1Element::from_byte_array(&compressed.clone().try_into().expect("48 bytes"))
+            .expect("valid point");
         let uncompressed = G1ElementUncompressed::from(&element);
         let uncompressed_bytes = uncompressed.into_byte_array().to_vec();
         assert_eq!(uncompressed_bytes.len(), UNCOMPRESSED_PUBLIC_KEY_LENGTH);
@@ -386,8 +379,10 @@ mod tests {
         let message = b"walrus storage confirmation";
         let kps: Vec<_> = (0..3).map(|_| keypair()).collect();
 
-        let signatures: Vec<Vec<u8>> =
-            kps.iter().map(|kp| kp.sign(message).as_ref().to_vec()).collect();
+        let signatures: Vec<Vec<u8>> = kps
+            .iter()
+            .map(|kp| kp.sign(message).as_ref().to_vec())
+            .collect();
         let public_keys: Vec<Vec<u8>> =
             kps.iter().map(|kp| kp.public().as_ref().to_vec()).collect();
 
@@ -422,8 +417,10 @@ mod tests {
 
         let message = b"walrus storage confirmation";
         let kps: Vec<_> = (0..3).map(|_| keypair()).collect();
-        let signatures: Vec<Vec<u8>> =
-            kps.iter().map(|kp| kp.sign(message).as_ref().to_vec()).collect();
+        let signatures: Vec<Vec<u8>> = kps
+            .iter()
+            .map(|kp| kp.sign(message).as_ref().to_vec())
+            .collect();
         let public_keys: Vec<Vec<u8>> =
             kps.iter().map(|kp| kp.public().as_ref().to_vec()).collect();
         let aggregate = aggregate_signatures(&signatures).expect("aggregate");
@@ -436,7 +433,10 @@ mod tests {
         println!("BLS_PUBLIC_KEYS[0]           = {}", to_hex(&public_keys[0]));
         println!("BLS_PUBLIC_KEYS[1]           = {}", to_hex(&public_keys[1]));
         println!("BLS_PUBLIC_KEYS[2]           = {}", to_hex(&public_keys[2]));
-        println!("BLS_PUBLIC_KEY_0_UNCOMPRESSED = {}", to_hex(&uncompressed_pk0));
+        println!(
+            "BLS_PUBLIC_KEY_0_UNCOMPRESSED = {}",
+            to_hex(&uncompressed_pk0)
+        );
         println!("BLS_SIGNATURES[0]            = {}", to_hex(&signatures[0]));
         println!("BLS_SIGNATURES[1]            = {}", to_hex(&signatures[1]));
         println!("BLS_SIGNATURES[2]            = {}", to_hex(&signatures[2]));

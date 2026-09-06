@@ -6,16 +6,25 @@
 // Commit:   14641cc0edcc727825d07aa19df2eef8046a3c0d
 //
 // Modifications Copyright Frank V. Castellucci:
-//   * Encode path only. `EncodingFactory` is vendored as a SUBSET: upstream
-//     declares 32 methods, of which 25 are decode, quilt or size-calculation
-//     methods referencing types this crate deliberately does not vendor
-//     (`DecodingSymbol`, `BlobDecoder`, `ConsistencyCheckType`,
-//     `RequiredCount`, `DecodeError`). Only the 7 encode-path methods are
-//     vendored (7 originally, plus `encode_with_metadata` once
-//     `blob_encoding.rs` and `metadata.rs` landed). The `#[enum_dispatch]`
-//     structure and the single-variant
-//     `EncodingConfigEnum` wrapper are retained for future-proofing against
-//     upstream adding further encoding types.
+//   * Encode and decode paths. `EncodingFactory` is vendored as a SUBSET:
+//     upstream declares 32 methods. Vendored here are TWELVE: the 8 encode-path
+//     methods (7 originally, plus `encode_with_metadata` once
+//     `blob_encoding.rs` and `metadata.rs` landed), and four more the decode
+//     and verification paths need — `symbol_size_for_blob` and `max_blob_size`
+//     for `BlobDecoder::new` and metadata verification, `sliver_size_for_blob`
+//     and `encode_all_symbols` for per-sliver verification. The manifest's
+//     `encoding/config.rs` table lists all twelve. `ReedSolomonEncodingConfig::get_blob_decoder` is vendored
+//     alongside the encoder equivalents.
+//     Still omitted: the quilt methods; the remaining size-calculation methods;
+//     `decode`, `decode_and_verify` and `strict_consistency_check`, which this
+//     crate replaces by re-encoding a decoded blob through the already-vendored
+//     `encode_with_metadata` and comparing blob IDs — equivalent in strength to
+//     upstream's `Strict` check; and `get_decoder`, whose only upstream caller
+//     is `EncodingFactory::decode`. `symbol_size_for_blob_from_nonzero` is also
+//     omitted: upstream declares it with a body identical to
+//     `symbol_size_for_blob`. The `#[enum_dispatch]` structure and the
+//     single-variant `EncodingConfigEnum` wrapper are retained for
+//     future-proofing against upstream adding further encoding types.
 //   * `tracing` calls and `#[tracing::instrument]` attributes are removed;
 //     `tracing` is not a dependency of this crate and these are pure
 //     observability with no functional effect.
@@ -34,20 +43,20 @@ use std::num::{NonZeroU16, NonZeroU32};
 use enum_dispatch::enum_dispatch;
 
 use super::{
+    BlobDecoder,
     BlobEncoder,
     DataTooLargeError,
+    DecodeError,
     EncodeError,
     EncodingAxis,
     OwnedOrBorrowedBlob,
+    ReedSolomonDecoder,
     ReedSolomonEncoder,
     SliverPair,
+    Symbols,
     utils,
 };
-use crate::walrus::vendored::{
-    bft,
-    core::EncodingType,
-    metadata::VerifiedBlobMetadataWithId,
-};
+use crate::walrus::vendored::{bft, core::EncodingType, metadata::VerifiedBlobMetadataWithId};
 
 /// The maximum number of source symbols that can be encoded with our encoding (currently
 /// Reed-Solomon). This is dictated by [`reed_solomon_simd::engine::GF_ORDER`].
@@ -91,6 +100,45 @@ pub trait EncodingFactory {
             self.n_primary_source_symbols(),
             self.n_secondary_source_symbols(),
         )
+    }
+
+    /// The symbol size when encoding a blob of size `blob_size`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`DataTooLargeError`] if the computed symbol size is larger than the maximum
+    /// symbol size.
+    #[inline]
+    fn symbol_size_for_blob(&self, blob_size: u64) -> Result<NonZeroU16, DataTooLargeError> {
+        utils::compute_symbol_size(
+            blob_size,
+            self.source_symbols_per_blob(),
+            self.encoding_type().required_alignment(),
+        )
+    }
+
+    /// Returns a vector of all `n_shards` source and repair symbols for a single 1D encoding.
+    fn encode_all_symbols<E: EncodingAxis>(&self, data: &[u8]) -> Result<Symbols, EncodeError>;
+
+    /// The maximum size in bytes of a blob that can be encoded.
+    ///
+    /// See [`max_blob_size_for_n_shards`] for additional documentation.
+    #[inline]
+    fn max_blob_size(&self) -> u64 {
+        max_blob_size_for_n_shards(self.n_shards(), self.encoding_type())
+    }
+
+    /// The size (in bytes) of a sliver corresponding to a blob of size `blob_size`.
+    ///
+    /// Returns a [`DataTooLargeError`] `blob_size > self.max_blob_size()`.
+    #[inline]
+    fn sliver_size_for_blob<E: EncodingAxis>(
+        &self,
+        blob_size: u64,
+    ) -> Result<NonZeroU32, DataTooLargeError> {
+        NonZeroU32::from(self.n_source_symbols::<E::OrthogonalAxis>())
+            .checked_mul(self.symbol_size_for_blob(blob_size)?.into())
+            .ok_or(DataTooLargeError)
     }
 
     /// Encodes the blob with which `self` was created to a vector of [`SliverPair`s][SliverPair],
@@ -271,6 +319,14 @@ impl ReedSolomonEncodingConfig {
     ) -> Result<BlobEncoder<'static>, DataTooLargeError> {
         BlobEncoder::new((*self).into(), OwnedOrBorrowedBlob::new_owned(blob))
     }
+
+    /// Returns a [`BlobDecoder`] for the given `blob_size`.
+    pub fn get_blob_decoder<E: EncodingAxis>(
+        &self,
+        blob_size: u64,
+    ) -> Result<BlobDecoder<ReedSolomonDecoder, E>, DecodeError> {
+        BlobDecoder::new(self, blob_size)
+    }
 }
 
 impl EncodingFactory for ReedSolomonEncodingConfig {
@@ -294,12 +350,39 @@ impl EncodingFactory for ReedSolomonEncodingConfig {
         ReedSolomonEncodingConfig::ENCODING_TYPE
     }
 
+    fn encode_all_symbols<E: EncodingAxis>(&self, data: &[u8]) -> Result<Symbols, EncodeError> {
+        self.get_encoder::<E>(data.len())?.encode_all(data)
+    }
+
     fn encode_with_metadata(
         &self,
         blob: Vec<u8>,
     ) -> Result<(Vec<SliverPair>, VerifiedBlobMetadataWithId), DataTooLargeError> {
         Ok(self.get_blob_encoder_owned(blob)?.encode_with_metadata())
     }
+}
+
+/// The maximum size in bytes of a blob that can be encoded, given the number of shards and the
+/// encoding type.
+///
+/// This is limited by the total number of source symbols, which is fixed by the dimensions
+/// `source_symbols_primary` x `source_symbols_secondary` of the message matrix, and the maximum
+/// symbol size supported by the encoding type.
+///
+/// Note that on 32-bit architectures, the actual limit can be smaller than that due to the limited
+/// address space.
+#[inline]
+pub fn max_blob_size_for_n_shards(n_shards: NonZeroU16, encoding_type: EncodingType) -> u64 {
+    u64::from(source_symbols_per_blob_for_n_shards(n_shards).get())
+        * u64::from(encoding_type.max_symbol_size())
+}
+
+#[inline]
+fn source_symbols_per_blob_for_n_shards(n_shards: NonZeroU16) -> NonZeroU32 {
+    let (source_symbols_primary, source_symbols_secondary) = source_symbols_for_n_shards(n_shards);
+    NonZeroU32::from(source_symbols_primary)
+        .checked_mul(source_symbols_secondary.into())
+        .expect("product of two u16 always fits into a u32")
 }
 
 /// Computes the number of primary encoding and secondary encoding source symbols starting from the

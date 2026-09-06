@@ -6,7 +6,9 @@
 // Commit:   14641cc0edcc727825d07aa19df2eef8046a3c0d
 //
 // Modifications Copyright Frank V. Castellucci:
-//   * Encode path only. Merkle PROOF support is omitted: `MerkleProof`,
+//   * Encode and verification paths. `MerkleTree::build` backs decode-time
+//     checks too, via `SliverData::verify` and `BlobMetadataWithId::verify`.
+//     Merkle PROOF support is omitted: `MerkleProof`,
 //     `MerkleProofError`, the `MerkleAuth` trait, `verify_root`, `get_proof`
 //     and `path_length` are not vendored.
 //   * Upstream is `#![no_std]` and imports from `alloc`; this crate is std,

@@ -6,21 +6,32 @@
 // Commit:   14641cc0edcc727825d07aa19df2eef8046a3c0d
 //
 // Modifications Copyright Frank V. Castellucci:
-//   * Encode path only. All decoding/recovery symbol types are omitted.
+//   * Encode and decode paths. `DecodingSymbol` is vendored; the recovery
+//     symbol types (`EitherDecodingSymbol`, `GeneralRecoverySymbol`,
+//     `RecoverySymbol`, `RecoverySymbolPair`) remain omitted.
+//   * `DecodingSymbol::with_proof` is omitted — it returns a `RecoverySymbol`,
+//     which is not vendored.
+//   * `Symbols::len`, `Symbols::is_empty`, `Symbols::into_vec` and the
+//     `Index`/`IndexMut` impls over `Range<usize>` are restored — all four were
+//     trimmed as encode-unused but are required by the decode path.
+//     `AsRef<[u8]> for Symbols` remains omitted.
+//   * `Display for DecodingSymbol` is omitted, matching the treatment of
+//     `Display for SliverData` in `slivers.rs`.
 //   * Upstream is `#![no_std]` and imports from `alloc`; this crate is std,
 //     so those imports are dropped.
 //   * Upstream `#[cfg(test)]` code omitted.
 
 //! Symbol storage for RedStuff encoding, vendored from walrus-core.
 
+use core::marker::PhantomData;
 use core::num::NonZeroU16;
-use core::ops::{Index, IndexMut};
+use core::ops::{Index, IndexMut, Range};
 use core::slice::{Chunks, ChunksMut};
 
 use serde::{Deserialize, Serialize};
 use serde_with::{Bytes, serde_as};
 
-use super::WrongSymbolSizeError;
+use super::{EncodingAxis, WrongSymbolSizeError};
 
 /// A set of encoded symbols.
 #[serde_as]
@@ -88,6 +99,18 @@ impl Symbols {
             .reserve((min_capacity * self.symbol_usize()).saturating_sub(current_data_capacity));
     }
 
+    /// The number of symbols.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.data.len() / self.symbol_usize()
+    }
+
+    /// True iff it does not contain any symbols.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
     /// Returns an iterator of references to symbols.
     #[inline]
     pub fn to_symbols(&self) -> Chunks<'_, u8> {
@@ -145,6 +168,12 @@ impl Symbols {
     pub fn symbol_range(&self, range: core::ops::Range<usize>) -> core::ops::Range<usize> {
         self.symbol_usize() * range.start..self.symbol_usize() * range.end
     }
+
+    /// Returns the underlying byte vector as an owned object.
+    #[inline]
+    pub fn into_vec(self) -> Vec<u8> {
+        self.data
+    }
 }
 
 impl Index<usize> for Symbols {
@@ -159,5 +188,62 @@ impl IndexMut<usize> for Symbols {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         let range = self.symbol_range(index..index + 1);
         &mut self.data[range]
+    }
+}
+
+impl Index<Range<usize>> for Symbols {
+    type Output = [u8];
+
+    fn index(&self, index: Range<usize>) -> &Self::Output {
+        &self.data[self.symbol_range(index)]
+    }
+}
+
+impl IndexMut<Range<usize>> for Symbols {
+    fn index_mut(&mut self, index: Range<usize>) -> &mut Self::Output {
+        let range = self.symbol_range(index);
+        &mut self.data[range]
+    }
+}
+
+/// A single symbol used for decoding, consisting of the data and the symbol's index.
+///
+/// The type parameter `T` represents the [`EncodingAxis`] of the sliver that can be recovered from
+/// this symbol.  I.e., a [`DecodingSymbol<Primary>`] is used to recover a
+/// [`Sliver<Primary>`][super::slivers::SliverData<Primary>].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DecodingSymbol<T> {
+    /// The index of the symbol.
+    ///
+    /// This is equal to the ESI as defined in [RFC 6330][rfc6330s5.3.1].
+    ///
+    /// [rfc6330s5.3.1]: https://datatracker.ietf.org/doc/html/rfc6330#section-5.3.1
+    pub index: u16,
+    /// The symbol data as a byte vector.
+    pub data: Vec<u8>,
+    /// Marker representing whether this symbol is used to decode primary or secondary slivers.
+    _axis: PhantomData<T>,
+}
+
+impl<T: EncodingAxis> DecodingSymbol<T> {
+    /// Returns the symbol size in bytes.
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    /// Returns true iff the symbol size is 0.
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+}
+
+impl<T: EncodingAxis> DecodingSymbol<T> {
+    /// Creates a new `DecodingSymbol`.
+    pub fn new(index: u16, data: Vec<u8>) -> Self {
+        Self {
+            index,
+            data,
+            _axis: PhantomData,
+        }
     }
 }

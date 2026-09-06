@@ -7,7 +7,7 @@
 //! pysui-fastcrypto, fastcrypto and Sui code are all licensed under the Apache License, Version 2.0
 //!
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use base64ct::Encoding as _;
 use bip32::{ChildNumber, DerivationPath, XPrv};
 use bip39::{Language, Mnemonic, MnemonicType, Seed};
@@ -27,14 +27,9 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use crate::walrus::ffi::{
-    RedstuffEncodeResult,
-    RedstuffSliverPair,
-    bls_aggregate,
-    bls_aggregate_verify,
-    bls_verify,
-    bls_confirmation_bytes,
-    redstuff_encode,
-    bls_g1_compress,
+    RedstuffEncodeResult, RedstuffSliverPair, RedstuffVerifiedMetadata, bls_aggregate,
+    bls_aggregate_verify, bls_confirmation_bytes, bls_g1_compress, bls_verify, redstuff_decode,
+    redstuff_decode_and_verify, redstuff_encode, redstuff_verify_metadata, redstuff_verify_sliver,
 };
 
 mod walrus;
@@ -119,7 +114,7 @@ impl SuiPublicKey {
 /// Keypair for signing
 #[derive(Debug, PartialEq, Eq)]
 enum SuiKeyPair {
-    Ed25519(Ed25519KeyPair),
+    Ed25519(Box<Ed25519KeyPair>),
     Secp256k1(Secp256k1KeyPair),
     Secp256r1(Secp256r1KeyPair),
 }
@@ -178,9 +173,9 @@ impl SuiKeyPair {
 /// Construct a SuiKeyPair from seed bytes
 fn kp_from_bytes(kscheme: SignatureScheme, seed: &[u8]) -> Result<SuiKeyPair, LibError> {
     match kscheme {
-        SignatureScheme::ED25519 => Ok(SuiKeyPair::Ed25519(
+        SignatureScheme::ED25519 => Ok(SuiKeyPair::Ed25519(Box::new(
             Ed25519KeyPair::from_bytes(seed).map_err(|e| anyhow!("{:?}", e))?,
-        )),
+        ))),
         SignatureScheme::Secp256k1 => Ok(SuiKeyPair::Secp256k1(
             Secp256k1KeyPair::from_bytes(seed).map_err(|e| anyhow!("{:?}", e))?,
         )),
@@ -189,10 +184,9 @@ fn kp_from_bytes(kscheme: SignatureScheme, seed: &[u8]) -> Result<SuiKeyPair, Li
         )),
         SignatureScheme::BLS12381
         | SignatureScheme::MultiSig
-        | SignatureScheme::ZkLoginAuthenticator => Err(anyhow!(
-            "key derivation not supported {:?}",
-            kscheme
-        )),
+        | SignatureScheme::ZkLoginAuthenticator => {
+            Err(anyhow!("key derivation not supported {:?}", kscheme))
+        }
     }
 }
 
@@ -217,8 +211,7 @@ fn validate_path(
                 // The derivation path must be hardened at all levels with purpose = 44, coin_type = 784
                 if let &[purpose, coin_type, account, change, address] = p.as_ref() {
                     if Some(purpose) == ChildNumber::new(DERVIATION_PATH_PURPOSE_ED25519, true).ok()
-                        && Some(coin_type)
-                            == ChildNumber::new(DERIVATION_PATH_COIN_TYPE, true).ok()
+                        && Some(coin_type) == ChildNumber::new(DERIVATION_PATH_COIN_TYPE, true).ok()
                         && account.is_hardened()
                         && change.is_hardened()
                         && address.is_hardened()
@@ -244,8 +237,7 @@ fn validate_path(
                 if let &[purpose, coin_type, account, change, address] = p.as_ref() {
                     if Some(purpose)
                         == ChildNumber::new(DERVIATION_PATH_PURPOSE_SECP256K1, true).ok()
-                        && Some(coin_type)
-                            == ChildNumber::new(DERIVATION_PATH_COIN_TYPE, true).ok()
+                        && Some(coin_type) == ChildNumber::new(DERIVATION_PATH_COIN_TYPE, true).ok()
                         && account.is_hardened()
                         && !change.is_hardened()
                         && !address.is_hardened()
@@ -271,8 +263,7 @@ fn validate_path(
                 if let &[purpose, coin_type, account, change, address] = p.as_ref() {
                     if Some(purpose)
                         == ChildNumber::new(DERVIATION_PATH_PURPOSE_SECP256R1, true).ok()
-                        && Some(coin_type)
-                            == ChildNumber::new(DERIVATION_PATH_COIN_TYPE, true).ok()
+                        && Some(coin_type) == ChildNumber::new(DERIVATION_PATH_COIN_TYPE, true).ok()
                         && account.is_hardened()
                         && !change.is_hardened()
                         && !address.is_hardened()
@@ -294,10 +285,9 @@ fn validate_path(
         }
         SignatureScheme::BLS12381
         | SignatureScheme::MultiSig
-        | SignatureScheme::ZkLoginAuthenticator => Err(anyhow!(
-            "key derivation not supported {:?}",
-            key_scheme,
-        )),
+        | SignatureScheme::ZkLoginAuthenticator => {
+            Err(anyhow!("key derivation not supported {:?}", key_scheme,))
+        }
     }
 }
 
@@ -318,7 +308,7 @@ fn derive_key_pair_from_path(
             let sk = Ed25519PrivateKey::from_bytes(&derived)
                 .map_err(|e| anyhow!("KeyGen error {:?}", e.to_string()))?;
             let kp: Ed25519KeyPair = sk.into();
-            Ok(SuiKeyPair::Ed25519(kp))
+            Ok(SuiKeyPair::Ed25519(Box::new(kp)))
         }
         SignatureScheme::Secp256k1 => {
             let child_xprv = XPrv::derive_from_path(seed, &derivation_path)
@@ -340,10 +330,9 @@ fn derive_key_pair_from_path(
         }
         SignatureScheme::BLS12381
         | SignatureScheme::MultiSig
-        | SignatureScheme::ZkLoginAuthenticator => Err(anyhow!(
-            "key derivation not supported {:?}",
-            key_scheme
-        )),
+        | SignatureScheme::ZkLoginAuthenticator => {
+            Err(anyhow!("key derivation not supported {:?}", key_scheme))
+        }
     }
 }
 
@@ -427,7 +416,10 @@ pub fn generate_new_keypair(
 #[pyfunction]
 #[pyo3(signature = (work_count=None))]
 pub fn generate_mnemonic_phrase(work_count: Option<String>) -> PyResult<String> {
-    let mnemonic = Mnemonic::new(parse_word_length(work_count).map_err(py_err)?, Language::English);
+    let mnemonic = Mnemonic::new(
+        parse_word_length(work_count).map_err(py_err)?,
+        Language::English,
+    );
     Ok(mnemonic.phrase().to_string())
 }
 
@@ -478,7 +470,7 @@ pub fn sign_message(in_scheme: u8, prv_bytes: Vec<u8>, in_data: String) -> PyRes
     )
     .map_err(py_err)?;
     let msg = Base64::decode(&in_data).map_err(py_err)?;
-    Ok(Base64::encode(&kp.sign(&msg)))
+    Ok(Base64::encode(kp.sign(&msg)))
 }
 
 /// Verify signature (base64 string) is valid for data (base64 string) using private key.
@@ -544,10 +536,7 @@ pub fn decode_bech32(key_string: String, hrp: String) -> (u8, Vec<u8>, Vec<u8>) 
 /// Encode a key (scheme_flag | prv_bytes) to bech32.
 #[pyfunction]
 pub fn encode_bech32(prv_bytes: Vec<u8>, hrp: String) -> String {
-    match Bech32::encode(prv_bytes, &hrp) {
-        Ok(r) => r,
-        Err(_) => String::new(),
-    }
+    Bech32::encode(prv_bytes, &hrp).unwrap_or_default()
 }
 
 /// The pysui_fastcrypto module implemented in Rust.
@@ -566,7 +555,12 @@ fn pysui_fastcrypto(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     m.add_class::<RedstuffSliverPair>()?;
     m.add_class::<RedstuffEncodeResult>()?;
+    m.add_class::<RedstuffVerifiedMetadata>()?;
     m.add_function(wrap_pyfunction!(redstuff_encode, m)?)?;
+    m.add_function(wrap_pyfunction!(redstuff_verify_metadata, m)?)?;
+    m.add_function(wrap_pyfunction!(redstuff_decode, m)?)?;
+    m.add_function(wrap_pyfunction!(redstuff_decode_and_verify, m)?)?;
+    m.add_function(wrap_pyfunction!(redstuff_verify_sliver, m)?)?;
     m.add_function(wrap_pyfunction!(bls_confirmation_bytes, m)?)?;
     m.add_function(wrap_pyfunction!(bls_g1_compress, m)?)?;
     m.add_function(wrap_pyfunction!(bls_aggregate, m)?)?;
@@ -668,7 +662,7 @@ mod tests {
     #[test]
     fn test_keypair_from_keystring_invalid_scheme() {
         // base64 of [0xFF, 0x01, 0x02] — invalid scheme byte
-        let bad = Base64::encode(&[0xFF_u8, 0x01, 0x02]);
+        let bad = Base64::encode([0xFF_u8, 0x01, 0x02]);
         assert!(keypair_from_keystring(bad).is_err());
     }
 
@@ -694,7 +688,14 @@ mod tests {
 
     #[test]
     fn test_recover_keypair_bad_phrase() {
-        assert!(recover_keypair(0, "m/44'/784'/0'/0'/0'".to_string(), "not a real phrase".to_string()).is_err());
+        assert!(
+            recover_keypair(
+                0,
+                "m/44'/784'/0'/0'/0'".to_string(),
+                "not a real phrase".to_string()
+            )
+            .is_err()
+        );
     }
 
     #[test]
