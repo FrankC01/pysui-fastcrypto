@@ -6,8 +6,10 @@
 // Commit:   14641cc0edcc727825d07aa19df2eef8046a3c0d
 //
 // Modifications Copyright Frank V. Castellucci:
-//   * Encoder only. The `Decoder` trait and `ReedSolomonDecoder` are not
-//     vendored, nor are the quilt attribute constants.
+//   * Encoder and decoder. The `Decoder` trait, `ReedSolomonDecoder` and its
+//     `Debug` impl are vendored. The quilt attribute constants
+//     (`BLOB_TYPE_ATTRIBUTE_KEY`, `QUILT_TYPE_VALUE`) and the encode-side
+//     `encode_all_repair_symbols` / `get_symbol` remain omitted.
 //   * `tracing` calls and attributes removed; `tracing` is not a dependency
 //     of this crate and these are pure observability.
 //   * Upstream writes `crate::ensure!(...)`; here the vendored macro is
@@ -19,12 +21,63 @@
 //! Reed-Solomon encoder, vendored from walrus-core.
 
 use std::fmt;
+use std::mem;
 use std::num::NonZeroU16;
 
 use reed_solomon_simd::{self, EncoderResult};
 
-use super::{EncodeError, InvalidDataSizeError, Symbols, utils};
-use crate::walrus::vendored::core::{ensure, EncodingType};
+use super::{
+    DecodeError,
+    DecodingSymbol,
+    EncodeError,
+    EncodingAxis,
+    EncodingFactory,
+    InvalidDataSizeError,
+    ReedSolomonEncodingConfig,
+    Symbols,
+    utils,
+};
+use crate::walrus::vendored::core::{EncodingType, ensure};
+
+/// Trait implemented for all basic (1D) decoders.
+pub trait Decoder: Sized {
+    /// The type of the associated encoding configuration.
+    type Config: EncodingFactory;
+
+    /// Creates a new `Decoder`.
+    ///
+    /// Assumes that the length of the data to be decoded is the product of `n_source_symbols` and
+    /// `symbol_size`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`DecodeError::IncompatibleParameters`] if the provided parameters are not
+    /// consistent with the decoder.
+    fn new(
+        n_source_symbols: NonZeroU16,
+        n_shards: NonZeroU16,
+        symbol_size: NonZeroU16,
+    ) -> Result<Self, DecodeError>;
+
+    /// Attempts to decode the source data from the provided iterator over
+    /// [`DecodingSymbol`s][DecodingSymbol].
+    ///
+    /// Returns the source data as a byte vector if decoding succeeds or a [`DecodeError`] if
+    /// decoding fails.
+    ///
+    /// Symbols of incorrect size are dropped.
+    ///
+    /// If decoding failed due to an insufficient number of provided symbols
+    /// ([`DecodeError::DecodingUnsuccessful`]), it can be continued by additional calls to
+    /// [`decode`][Self::decode] providing more symbols.
+    ///
+    /// After the decoding is complete, the decoder can be reused for a new decoding.
+    fn decode<T, U>(&mut self, symbols: T) -> Result<Vec<u8>, DecodeError>
+    where
+        T: IntoIterator,
+        T::IntoIter: Iterator<Item = DecodingSymbol<U>>,
+        U: EncodingAxis;
+}
 
 /// Wrapper to perform a single encoding with Reed-Solomon for the provided parameters.
 // INV: n_source_symbols <= n_shards.
@@ -237,5 +290,90 @@ impl ReedSolomonEncoder {
 
     fn reed_solomon_shard_bytes(symbol_size: NonZeroU16) -> usize {
         symbol_size.get().into()
+    }
+}
+
+/// Wrapper to perform a 1D decoding with Reed-Solomon for the provided parameters.
+///
+/// The object can be reused for multiple consecutive decodings with the same parameters.
+pub struct ReedSolomonDecoder {
+    decoder: reed_solomon_simd::ReedSolomonDecoder,
+    n_source_symbols: NonZeroU16,
+    n_shards: NonZeroU16,
+    source_symbols: Symbols,
+}
+
+impl fmt::Debug for ReedSolomonDecoder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReedSolomonDecoder")
+            .field("n_source_symbols", &self.n_source_symbols)
+            .field("n_shards", &self.n_shards)
+            .finish()
+    }
+}
+
+impl Decoder for ReedSolomonDecoder {
+    type Config = ReedSolomonEncodingConfig;
+
+    fn new(
+        n_source_symbols: NonZeroU16,
+        n_shards: NonZeroU16,
+        symbol_size: NonZeroU16,
+    ) -> Result<Self, DecodeError> {
+        let source_symbols = Symbols::zeros(n_source_symbols.get().into(), symbol_size);
+        Ok(Self {
+            decoder: reed_solomon_simd::ReedSolomonDecoder::new(
+                n_source_symbols.get().into(),
+                (n_shards.get() - n_source_symbols.get()).into(),
+                symbol_size.get().into(),
+            )
+            .map_err(DecodeError::IncompatibleParameters)?,
+            n_source_symbols,
+            n_shards,
+            source_symbols,
+        })
+    }
+
+    fn decode<T, U>(&mut self, symbols: T) -> Result<Vec<u8>, DecodeError>
+    where
+        T: IntoIterator,
+        T::IntoIter: Iterator<Item = DecodingSymbol<U>>,
+        U: EncodingAxis,
+    {
+        let decoder = &mut self.decoder;
+        let symbol_size = self.source_symbols.symbol_size();
+        for symbol in symbols.into_iter() {
+            if symbol.data.len() != usize::from(symbol_size.get()) {
+                continue;
+            }
+            if symbol.index < self.n_source_symbols.get() {
+                self.source_symbols[usize::from(symbol.index)].copy_from_slice(&symbol.data);
+                let _ = decoder.add_original_shard(symbol.index.into(), symbol.data);
+            } else {
+                let _ = decoder.add_recovery_shard(
+                    usize::from(symbol.index - self.n_source_symbols.get()),
+                    symbol.data,
+                );
+            }
+        }
+        for (index, symbol) in decoder.decode()?.restored_original_iter() {
+            self.source_symbols[index].copy_from_slice(symbol);
+        }
+
+        // Take the decoded data and reset the decoder so it can be reused for a new decoding.
+        let result = mem::replace(
+            &mut self.source_symbols,
+            Symbols::zeros(self.n_source_symbols.get().into(), symbol_size),
+        )
+        .into_vec();
+        decoder
+            .reset(
+                self.n_source_symbols.get().into(),
+                (self.n_shards.get() - self.n_source_symbols.get()).into(),
+                self.source_symbols.symbol_size().get().into(),
+            )
+            .expect("cannot fail as we use the same parameters as when the decoder was created");
+
+        Ok(result)
     }
 }

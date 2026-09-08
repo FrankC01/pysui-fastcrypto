@@ -6,7 +6,8 @@
 // Commit:   14641cc0edcc727825d07aa19df2eef8046a3c0d
 //
 // Modifications Copyright Frank V. Castellucci:
-//   * Encode path only.
+//   * Encode and decode paths. `EncodingAxis` is a trait bound on the decode
+//     types (`BlobDecoder`, `DecodingSymbol`) as well as the encode ones.
 //   * `EncodingAxis::sliver_type()` omitted (unused on the encode path; its
 //     removal drops the dependency on `SliverType` / `by_axis::Axis`).
 //   * Upstream `#[cfg(test)]` code omitted.

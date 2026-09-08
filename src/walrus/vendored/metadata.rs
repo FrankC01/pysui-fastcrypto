@@ -6,14 +6,15 @@
 // Commit:   14641cc0edcc727825d07aa19df2eef8046a3c0d
 //
 // Modifications Copyright Frank V. Castellucci:
-//   * Encode path only. All quilt types, verification helpers and decode-side
-//     accessors are omitted.
-//   * `trait BlobMetadataApi` is reduced to the four members the encode path
-//     uses (`compute_root_hash`, `encoding_type`, `unencoded_length`,
-//     `hashes`). `get_sliver_hash`, `symbol_size` and `encoded_size` are
-//     omitted, and correspondingly omitted from
-//     `impl BlobMetadataApi for BlobMetadataV1`. This mirrors the
-//     `EncodingFactory` member-subset precedent in `encoding/config.rs`.
+//   * Encode, decode and verification paths. `VerificationError`, the
+//     `UnverifiedBlobMetadataWithId` alias and its `verify` method, and
+//     `SliverPairMetadata::hash` are vendored. All quilt types remain omitted.
+//   * `trait BlobMetadataApi` is reduced to the five members these paths use
+//     (`compute_root_hash`, `encoding_type`, `unencoded_length`, `hashes`,
+//     `symbol_size`). `get_sliver_hash` and `encoded_size` are omitted, and
+//     correspondingly omitted from `impl BlobMetadataApi for BlobMetadataV1`.
+//     This mirrors the `EncodingFactory` member-subset precedent in
+//     `encoding/config.rs`.
 //   * Upstream is `#![no_std]` and imports from `alloc`; this crate is std,
 //     so those imports are dropped.
 //   * Upstream `#[cfg(test)]` code omitted.
@@ -21,15 +22,37 @@
 //! Blob metadata types for RedStuff encoding, vendored from walrus-core.
 
 use core::fmt::Debug;
+use core::num::NonZeroU16;
 
 use enum_dispatch::enum_dispatch;
 use fastcrypto::hash::{Blake2b256, HashFunction};
 use serde::{Deserialize, Serialize};
 
 use crate::walrus::vendored::{
-    core::{BlobId, EncodingType},
+    core::{BlobId, EncodingType, ensure},
+    encoding::{DataTooLargeError, EncodingAxis, EncodingConfig, EncodingFactory as _},
     merkle::{DIGEST_LEN, MerkleTree, Node as MerkleNode},
 };
+
+/// Errors returned by [`UnverifiedBlobMetadataWithId::verify`] when unable to verify the metadata.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum VerificationError {
+    /// The number of sliver hashes present does not match the expected number.
+    #[error("the metadata contained an invalid number of hashes (expected {expected}): {actual}")]
+    InvalidHashCount {
+        /// The number of hash elements in the metadata.
+        actual: usize,
+        /// The expected number of hash elements.
+        expected: usize,
+    },
+    /// The blob ID does not match the value computed from the provided metadata.
+    #[error("the blob ID does not match the provided metadata")]
+    BlobIdMismatch,
+    /// The unencoded blob length in the metadata cannot be encoded with the number of symbols
+    /// available in the configuration provided.
+    #[error("the unencoded blob length is too large for the given config")]
+    UnencodedLengthTooLarge,
+}
 
 /// [`BlobMetadataWithId`] that has been verified with [`UnverifiedBlobMetadataWithId::verify`].
 ///
@@ -38,6 +61,9 @@ use crate::walrus::vendored::{
 /// - The number of sliver hashes matches the number of slivers (twice the number of shards).
 /// - The blob ID is correctly computed from the sliver hashes.
 pub type VerifiedBlobMetadataWithId = BlobMetadataWithId<true>;
+
+/// [`BlobMetadataWithId`] that has not been verified against its blob ID.
+pub type UnverifiedBlobMetadataWithId = BlobMetadataWithId<false>;
 
 /// Metadata associated with a blob.
 ///
@@ -87,6 +113,42 @@ impl<const V: bool> BlobMetadataWithId<V> {
     }
 }
 
+impl UnverifiedBlobMetadataWithId {
+    /// Attempts to verify the relationship between the contained metadata and blob ID.
+    ///
+    /// Consumes the metadata. On success, returns a [`VerifiedBlobMetadataWithId`].
+    pub fn verify(
+        self,
+        config: &EncodingConfig,
+    ) -> Result<VerifiedBlobMetadataWithId, VerificationError> {
+        let n_hashes = self.metadata().hashes().len();
+        let n_shards = config.n_shards.get().into();
+        ensure!(
+            n_hashes == n_shards,
+            VerificationError::InvalidHashCount {
+                actual: n_hashes,
+                expected: n_shards,
+            }
+        );
+        ensure!(
+            self.metadata.unencoded_length()
+                <= config
+                    .get_for_type(self.metadata.encoding_type())
+                    .max_blob_size(),
+            VerificationError::UnencodedLengthTooLarge
+        );
+        let computed_blob_id = BlobId::from_sliver_pair_metadata(&self.metadata);
+        ensure!(
+            computed_blob_id == *self.blob_id(),
+            VerificationError::BlobIdMismatch
+        );
+        Ok(BlobMetadataWithId {
+            blob_id: self.blob_id,
+            metadata: self.metadata,
+        })
+    }
+}
+
 /// Trait for the API of [`BlobMetadata`].
 #[enum_dispatch]
 pub trait BlobMetadataApi {
@@ -101,6 +163,12 @@ pub trait BlobMetadataApi {
 
     /// Returns the hashes of the sliver pairs of the blob.
     fn hashes(&self) -> &Vec<SliverPairMetadata>;
+
+    /// Returns the symbol size associated with the blob.
+    fn symbol_size(
+        &self,
+        encoding_config: &EncodingConfig,
+    ) -> Result<NonZeroU16, DataTooLargeError>;
 }
 
 /// Metadata about a blob.
@@ -177,6 +245,16 @@ impl BlobMetadataApi for BlobMetadataV1 {
     fn hashes(&self) -> &Vec<SliverPairMetadata> {
         &self.hashes
     }
+
+    /// Returns the symbol size associated with the blob.
+    fn symbol_size(
+        &self,
+        encoding_config: &EncodingConfig,
+    ) -> Result<NonZeroU16, DataTooLargeError> {
+        encoding_config
+            .get_for_type(self.encoding_type)
+            .symbol_size_for_blob(self.unencoded_length)
+    }
 }
 
 /// Metadata about a sliver pair, i.e., the root hashes of the primary and secondary slivers.
@@ -197,5 +275,14 @@ impl SliverPairMetadata {
         concat[0..DIGEST_LEN].copy_from_slice(&self.primary_hash.bytes());
         concat[DIGEST_LEN..2 * DIGEST_LEN].copy_from_slice(&self.secondary_hash.bytes());
         concat
+    }
+
+    /// Returns a reference to the hash for the sliver of the given [`EncodingAxis`].
+    pub fn hash<T: EncodingAxis>(&self) -> &MerkleNode {
+        if T::IS_PRIMARY {
+            &self.primary_hash
+        } else {
+            &self.secondary_hash
+        }
     }
 }

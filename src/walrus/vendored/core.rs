@@ -8,7 +8,7 @@
 // Modifications Copyright Frank V. Castellucci:
 //   * Named `core.rs` because upstream's items live in the crate root
 //     `lib.rs`, which cannot be mirrored as a file inside a module dir.
-//   * Encode path only.
+//   * Encode, decode and verification paths.
 //   * `BlobId::from_sliver_pair_metadata` omits upstream's `tracing::debug!`
 //     call; the surrounding `let blob_id = ...` binding is kept verbatim so the
 //     body stays diffable against upstream.
@@ -260,7 +260,8 @@ impl FromStr for BlobId {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let decoded = Base64UrlUnpadded::decode_vec(s).map_err(|_| BlobIdParseError)?;
-        let bytes = <[u8; Self::LENGTH]>::try_from(decoded.as_slice()).map_err(|_| BlobIdParseError)?;
+        let bytes =
+            <[u8; Self::LENGTH]>::try_from(decoded.as_slice()).map_err(|_| BlobIdParseError)?;
         Ok(Self(bytes))
     }
 }
@@ -312,6 +313,17 @@ index_type!(
     SliverPairIndex("sliver-pair")
 );
 
+// CAUTION — these two `From` impls are a bare newtype copy with NO index math,
+// and they are safe only where the axis is known to be primary.
+// `SliverPair::index()` in `encoding/slivers.rs` relies on the first: it
+// converts a PRIMARY sliver's index, and on the primary axis the axis-local
+// sliver index and the pair index are the same number by construction.
+// Applying either impl to a SECONDARY index silently yields the wrong value —
+// the correct conversion there is `n_shards - index - 1`, provided by the
+// axis-aware `SliverPairIndex::to_sliver_index::<E>()` and
+// `SliverIndex::to_pair_index::<E>()` below. Reach for those two unless you
+// already know the axis is primary. Upstream carries these impls verbatim;
+// they are kept rather than removed because `SliverPair::index()` needs them.
 impl From<SliverIndex> for SliverPairIndex {
     fn from(value: SliverIndex) -> Self {
         Self(value.0)
@@ -357,6 +369,25 @@ impl SliverPairIndex {
     ///
     /// Panics if the index is greater than or equal to `n_shards`.
     pub fn to_sliver_index<E: EncodingAxis>(self, n_shards: NonZeroU16) -> SliverIndex {
+        if E::IS_PRIMARY {
+            self.into()
+        } else {
+            (n_shards.get() - self.0 - 1).into()
+        }
+    }
+}
+
+impl SliverIndex {
+    /// Computes the index of the [`SliverPair`][encoding::SliverPair] of the corresponding axis
+    /// starting from the index of the [`Sliver`].
+    ///
+    /// This is the inverse of [`SliverPairIndex::to_sliver_index`]; see that function for further
+    /// information.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the index is greater than or equal to `n_shards`.
+    pub fn to_pair_index<E: EncodingAxis>(self, n_shards: NonZeroU16) -> SliverPairIndex {
         if E::IS_PRIMARY {
             self.into()
         } else {
@@ -485,4 +516,3 @@ impl Display for EncodingType {
         }
     }
 }
-

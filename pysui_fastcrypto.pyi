@@ -10,6 +10,8 @@ these stubs are the only type information available to callers. They are
 maintained by hand and must track ``src/lib.rs`` and ``src/walrus/ffi.rs``.
 """
 
+from typing import Literal
+
 # ---------------------------------------------------------------------------
 # Sui key, signing and encoding primitives
 # ---------------------------------------------------------------------------
@@ -162,6 +164,193 @@ def redstuff_encode(blob: bytes, n_shards: int) -> RedstuffEncodeResult:
     Raises:
         ValueError: if ``n_shards`` is less than 4 (RedStuff requires
             tolerance for at least one fault) or the blob cannot be encoded.
+    """
+    ...
+
+class RedstuffVerifiedMetadata:
+    """Blob metadata that has been verified against its own blob ID.
+
+    Returned by ``redstuff_verify_metadata`` and accepted by
+    ``redstuff_decode_and_verify`` and ``redstuff_verify_sliver``. Holding the
+    verified metadata in a handle means verification runs once per blob rather
+    than once per sliver, and makes it structurally impossible to verify
+    metadata under one ``n_shards`` and then check slivers under another — the
+    committee size travels with the handle.
+    """
+
+    @property
+    def blob_id(self) -> bytes:
+        """Raw 32-byte blob ID, recomputed from the metadata and confirmed to match."""
+        ...
+
+    @property
+    def unencoded_length(self) -> int:
+        """Length in bytes of the original, unencoded blob.
+
+        This is the ``blob_size`` a bare ``redstuff_decode`` call needs, so a
+        caller that has already verified metadata never has to source it
+        separately.
+        """
+        ...
+
+    @property
+    def n_shards(self) -> int:
+        """The committee size this metadata was verified against."""
+        ...
+
+def redstuff_verify_metadata(
+    metadata_bcs: bytes,
+    n_shards: int,
+) -> RedstuffVerifiedMetadata:
+    """Verify blob metadata against its own blob ID, returning a reusable handle.
+
+    ``metadata_bcs`` is the OUTER ``BlobMetadataWithId`` — the body a storage
+    node returns from a metadata GET. This is NOT the same shape as
+    ``RedstuffEncodeResult.metadata_bcs``, which is the INNER ``BlobMetadata``
+    that the metadata PUT expects. The two differ by a leading 32-byte blob ID,
+    and passing the wrong one fails with code ``"invalid_metadata_bcs"``.
+
+    Verification confirms three things: the number of sliver hashes matches the
+    committee size, the unencoded length is encodable under this configuration,
+    and the blob ID recomputed from the sliver hashes matches the one carried in
+    the message. It does NOT authenticate the blob ID itself — the caller must
+    have obtained that from an on-chain source and compared it.
+
+    SECURITY CONTRACT: as with ``redstuff_encode``, ``n_shards`` MUST come from
+    an on-chain-sourced Walrus committee. It is a trust boundary, not a tuning
+    knob.
+
+    Releases the GIL for the verification.
+
+    Raises:
+        ValueError: if ``n_shards`` is less than 4, the bytes do not parse, or
+            verification fails. ``exc.args`` is ``(code, message)``, where
+            ``code`` is one of ``"invalid_n_shards"``,
+            ``"invalid_metadata_bcs"``, ``"invalid_hash_count"``,
+            ``"blob_id_mismatch"``, ``"unencoded_length_too_large"``. Match on
+            ``code``, not the message text.
+    """
+    ...
+
+def redstuff_decode(
+    slivers: list[bytes],
+    blob_size: int,
+    n_shards: int,
+    axis: Literal["primary", "secondary"],
+) -> bytes:
+    """Reconstruct a blob from slivers, WITHOUT verifying the result.
+
+    This is the optimistic path: it trusts that the slivers came from honest
+    nodes and that ``blob_size`` and ``n_shards`` are correct. Nothing here
+    detects a malicious or corrupted sliver — a bad symbol produces a different
+    blob with no error. Use ``redstuff_decode_and_verify`` wherever the source
+    of the slivers is not already trusted.
+
+    ``slivers`` must all be of the axis named by ``axis``. They are BCS-encoded
+    slivers: exactly the bytes a storage node returns from a sliver read, and
+    exactly the bytes ``RedstuffSliverPair.primary`` / ``.secondary`` carry.
+    Each sliver's own index travels inside those bytes, so list order does not
+    matter and gaps are fine; extra slivers past the threshold are ignored, and
+    slivers of the wrong length or symbol size are silently dropped rather than
+    rejected.
+
+    The threshold differs by axis: primary decoding needs ``n_shards - 2f``
+    slivers, secondary decoding needs ``n_shards - f``, where ``f`` is the
+    Byzantine parameter. At the production ``n_shards = 1000`` that is 334
+    primary or 667 secondary. Too few slivers — after the drops above — fails
+    with code ``"decoding_unsuccessful"``.
+
+    ``blob_size`` is the UNENCODED blob length. It is not derivable from the
+    slivers, and a wrong value yields either a decode failure or a wrongly
+    truncated blob, not an error. ``RedstuffVerifiedMetadata.unencoded_length``
+    is the authenticated source for it.
+
+    Releases the GIL for the whole decode. Peak memory is roughly the decoded
+    blob plus the provided slivers.
+
+    Raises:
+        ValueError: if an argument is invalid or decoding fails. ``exc.args``
+            is ``(code, message)``, where ``code`` is one of
+            ``"invalid_n_shards"``, ``"invalid_axis"``,
+            ``"invalid_sliver_bcs"``, ``"data_too_large"``,
+            ``"incompatible_parameters"``, ``"decoder_error"``,
+            ``"decoding_unsuccessful"``. Match on ``code``, not the message
+            text.
+    """
+    ...
+
+def redstuff_decode_and_verify(
+    slivers: list[bytes],
+    metadata: RedstuffVerifiedMetadata,
+    axis: Literal["primary", "secondary"],
+) -> bytes:
+    """Reconstruct a blob from slivers and prove it is the blob the metadata names.
+
+    Decodes exactly as ``redstuff_decode`` does, then re-encodes the result and
+    checks that the recomputed blob ID matches the one in ``metadata``. Because
+    the blob ID commits to every sliver hash, a match proves the decoded bytes
+    are the blob that was originally encoded — any corrupted or forged sliver
+    that changed the output produces a different blob ID.
+
+    This is the safe default for reads from storage nodes, which are untrusted
+    individually. Prefer it to ``redstuff_decode`` unless the slivers are
+    already known-good.
+
+    ``blob_size`` and ``n_shards`` are taken from ``metadata`` rather than
+    passed separately, so they cannot disagree with what was verified.
+
+    Cost: verification is a full re-encode, so this is roughly twice the work of
+    a bare decode, and peak memory is dominated by the re-encode's ~4.5x
+    RedStuff expansion of the decoded blob — budget roughly 6x the blob size.
+    The GIL is released for decode and verification together.
+
+    Raises:
+        ValueError: if an argument is invalid, decoding fails, or the decoded
+            blob does not match the metadata. ``exc.args`` is
+            ``(code, message)``, where ``code`` is one of ``"invalid_axis"``,
+            ``"invalid_sliver_bcs"``, ``"data_too_large"``,
+            ``"incompatible_parameters"``, ``"decoder_error"``,
+            ``"decoding_unsuccessful"``, ``"blob_id_mismatch"``.
+            ``"blob_id_mismatch"`` means the decode produced the wrong bytes —
+            retry against a different set of nodes. Match on ``code``, not the
+            message text.
+    """
+    ...
+
+def redstuff_verify_sliver(
+    sliver: bytes,
+    metadata: RedstuffVerifiedMetadata,
+    axis: Literal["primary", "secondary"],
+) -> None:
+    """Check one sliver against verified metadata, raising if it does not match.
+
+    Returns ``None`` on success and raises ``ValueError`` on any failure. This
+    breaks from ``bls_verify``, which returns a bool: a sliver check has four
+    distinct failure modes a caller must tell apart — a wrong-axis or
+    wrong-length sliver is a client bug, while a Merkle-root mismatch is a
+    dishonest node to be dropped from the read set. A bool would collapse all
+    four.
+
+    Verifying every sliver before decoding is NOT required, and is the expensive
+    way to read a blob: each call re-encodes the sliver out to ``n_shards``
+    symbols and builds a Merkle tree over them. ``redstuff_decode_and_verify``
+    proves the same property for the whole blob at the cost of one re-encode
+    total. Reach for this function to identify WHICH node served a bad sliver
+    after a decode verification has already failed, or when slivers must be
+    validated as they arrive rather than in a batch.
+
+    Releases the GIL for the check, unlike every ``bls_*`` function, so a caller
+    fanning out across nodes can verify concurrently.
+
+    Raises:
+        ValueError: if the sliver does not parse or does not verify.
+            ``exc.args`` is ``(code, message)``, where ``code`` is one of
+            ``"invalid_axis"``, ``"invalid_sliver_bcs"``, ``"index_too_large"``,
+            ``"sliver_size_mismatch"``, ``"symbol_size_mismatch"``,
+            ``"merkle_root_mismatch"``. Only ``"merkle_root_mismatch"``
+            indicts the serving node; the others indicate the wrong sliver,
+            axis, or metadata was supplied. Match on ``code``, not the message
+            text.
     """
     ...
 

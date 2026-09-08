@@ -61,6 +61,15 @@ BACKTICK_RE = re.compile(r"`[^`]*`")
 SPAN_RE = re.compile(r"(\d+)\s*-\s*(\d+)")
 NUM_RE = re.compile(r"\d+")
 GT_SPAN_RE = re.compile(r"(\d+)(?:-(\d+))?$")
+#: An explicit ``file.rs:NN`` or ``file.rs:NN-MM`` citation. Sections whose
+#: heading covers several files name the file per row; without reading that,
+#: every span is credited to every file in the heading.
+FILE_SPAN_RE = re.compile(r"([A-Za-z0-9_./]+\.rs):(\d+)(?:\s*-\s*(\d+))?")
+#: A real item table starts with an ``Item`` column. Other tables in the
+#: manifest -- byte layouts, for one -- are data, not citations.
+ITEM_TABLE_HEADER_RE = re.compile(r"^\|\s*Item\s*\|", re.IGNORECASE)
+#: Marker on a manifest row whose cited lines are a macro INVOCATION site.
+MACRO_CITATION = "macro invocation"
 
 
 @dataclass(frozen=True)
@@ -87,6 +96,12 @@ class Coverage:
 
     ported: list = field(default_factory=list)
     excluded: list = field(default_factory=list)
+    #: Spans the manifest cites at a line that can never anchor. An
+    #: ``index_type!`` invocation generates its type at expansion time, and
+    #: ``rust_ranges.py`` itemises only the macro DEFINITION, never its call
+    #: sites -- so no citation for a generated type can match an item start.
+    #: Rows marked "macro invocation" land here and skip the phantom check.
+    exempt: list = field(default_factory=list)
 
     def all_spans(self) -> list:
         """Return every span the manifest cites for this file."""
@@ -121,14 +136,29 @@ def parse_ground_truth(*, path: Path) -> dict:
     return files
 
 
-def extract_spans(*, text: str) -> list:
+def extract_spans(*, text: str, allow_bare: bool = True) -> list:
     """Pull every line span out of free-form manifest prose.
 
     Backticked runs are stripped first so that identifiers such as ``[u8;32]``
     do not contribute spurious line numbers.
+
+    A reversed span is never a citation: ``2026-08`` inside a dated annotation
+    parses as ``(2026, 8)`` and is dropped here.
+
+    ``allow_bare`` controls whether a lone number counts as a single-line
+    citation. True for table cells and exclusion bullets, where ``| 45 |`` and
+    ``(471)`` genuinely mean one line. False for prose, where bare digits are
+    almost always something else -- a date's day, a "12-member" count, an
+    "index 0" aside -- and were a large share of the phantom reports.
     """
     stripped = BACKTICK_RE.sub(" ", text)
-    spans = [(int(a), int(b)) for a, b in SPAN_RE.findall(stripped)]
+    spans = [
+        (int(a), int(b))
+        for a, b in SPAN_RE.findall(stripped)
+        if int(b) >= int(a)
+    ]
+    if not allow_bare:
+        return spans
     consumed = set()
     for start, end in spans:
         consumed.add(str(start))
@@ -146,6 +176,25 @@ def resolve_file(*, key: str, known: dict) -> str | None:
         return candidate
     matches = [name for name in known if name.rsplit("/", 1)[-1] == candidate]
     return matches[0] if len(matches) == 1 else None
+
+
+def attributed_spans(*, text: str, known: dict) -> dict:
+    """Map explicit ``file.rs:NN`` citations onto the file each one names.
+
+    Returns ``{relpath: [spans]}``, empty when the text names no file. This is
+    what stops a span belonging to one file in a multi-file section from being
+    credited to its siblings and then reported as a phantom there.
+    """
+    hits: dict = {}
+    for name, start, end in FILE_SPAN_RE.findall(BACKTICK_RE.sub(" ", text)):
+        target = resolve_file(key=name, known=known)
+        if target is None:
+            continue
+        low = int(start)
+        high = int(end) if end else low
+        if high >= low:
+            hits.setdefault(target, []).append((low, high))
+    return hits
 
 
 def heading_targets(*, raw: str, known: dict) -> list:
@@ -172,13 +221,21 @@ def parse_manifest(*, path: Path, known: dict) -> dict:
         return coverage.setdefault(name, Coverage())
 
     lines = path.read_text(encoding="utf-8").splitlines()
+    in_item_table = False
 
     for raw in lines:
         if raw.startswith("## "):
             current = heading_targets(raw=raw, known=known)
             for name in current:
                 bucket(name)
+            in_item_table = False
             continue
+
+        if ITEM_TABLE_HEADER_RE.match(raw):
+            in_item_table = True
+            continue
+        if not raw.strip():
+            in_item_table = False
 
         bullet = BULLET_RE.match(raw)
         if bullet is not None:
@@ -205,18 +262,35 @@ def parse_manifest(*, path: Path, known: dict) -> dict:
                 )
             continue
 
-        row = TABLE_ROW_RE.match(raw)
-        if row is not None:
-            for name in current:
-                bucket(name).ported.extend(extract_spans(text=row.group(2)))
+        if in_item_table and raw.startswith("|"):
+            is_macro = MACRO_CITATION in raw.lower()
+            attributed = attributed_spans(text=raw, known=known)
+            if attributed:
+                for name, spans in attributed.items():
+                    bucket(name).ported.extend(spans)
+                    if is_macro:
+                        bucket(name).exempt.extend(spans)
+                continue
+            row = TABLE_ROW_RE.match(raw)
+            if row is not None:
+                found = extract_spans(text=row.group(2))
+                for name in current:
+                    bucket(name).ported.extend(found)
+                    if is_macro:
+                        bucket(name).exempt.extend(found)
             continue
 
         # Some sections predate the table convention and list their items as
         # prose or bullets. Treat any backticked item carrying a line span as
         # ported, so those sections are not reported wholly unclassified.
+        # Bare numbers are NOT citations here: in prose they are dates, counts
+        # and cross-references, and reading them as line numbers produced a
+        # large share of the phantom reports.
         if "`" in raw:
             for name in current:
-                bucket(name).ported.extend(extract_spans(text=raw))
+                bucket(name).ported.extend(
+                    extract_spans(text=raw, allow_bare=False)
+                )
 
     return coverage
 
@@ -286,7 +360,13 @@ def classify_file(*, items: list, coverage: Coverage) -> dict:
     unclassified = [item for item in live if item not in covered]
 
     starts = {item.start for item in items}
-    phantom = sorted({span for span in spans if span[0] not in starts})
+    # The whole-file exclusion sentinel is synthesised by this script, not
+    # cited by the manifest, so it is never a manifest defect. Macro-invocation
+    # citations are exempt for the reason given on ``Coverage.exempt``.
+    exempt = set(coverage.exempt) | {(0, WHOLE_FILE_END)}
+    phantom = sorted(
+        {span for span in spans if span[0] not in starts and span not in exempt}
+    )
 
     # Only an item the manifest ports by its own exact span can be swallowed.
     # A broad ported range (a whole trait) legitimately contains members that

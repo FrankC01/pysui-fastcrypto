@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.7] - 2026-09-08
+
+### Added
+
+- [enhancement](https://github.com/FrankC01/pysui-fastcrypto/issues/16) RedStuff decode surface — the inverse of `redstuff_encode`, for reading blobs directly from storage nodes:
+  - `redstuff_verify_metadata` — verify blob metadata against its own blob ID, returning a reusable handle. Takes the outer `BlobMetadataWithId` a metadata GET returns, which is NOT the shape `RedstuffEncodeResult.metadata_bcs` emits for the PUT
+  - `redstuff_decode` — reconstruct a blob from slivers of one axis, without verification
+  - `redstuff_decode_and_verify` — reconstruct, then re-encode and confirm the blob ID matches the metadata. The safe default for slivers from individually-untrusted nodes
+  - `redstuff_verify_sliver` — authenticate a single sliver against verified metadata; raises rather than returning a bool, so the four distinct failure modes stay distinguishable
+  - `RedstuffVerifiedMetadata` — handle carrying the verified blob ID, unencoded length and committee size, so later calls cannot disagree with what was verified
+- Decode errors raise `ValueError` with `args` as a `(code, message)` 2-tuple, matching the `bls_*` convention. `redstuff_encode` still raises a 1-tuple
+
+### Fixed
+
+### Changed
+
+- GitHub Actions now publish pysui-fastcrypto sdist via github build_release workflow
+- Rust edition 2021 → 2024, `rust-version` 1.87.
+- CI now pins `rust-toolchain: stable` for the Windows and macOS wheel builds, which previously relied on the runner's preinstalled toolchain
+
+### Removed
+
 ## [0.7.6] - 2026-08-18
 
 ### Added

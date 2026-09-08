@@ -1,8 +1,9 @@
 [package]
 name = "pysui-fastcrypto"
-version = "0.7.6"
+version = "0.7.7"
 license = "Apache-2.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.87"
 exclude = ["scratch/**"]
 
 [lib]

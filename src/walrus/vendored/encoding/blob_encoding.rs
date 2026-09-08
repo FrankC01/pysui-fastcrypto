@@ -6,9 +6,12 @@
 // Commit:   14641cc0edcc727825d07aa19df2eef8046a3c0d
 //
 // Modifications Copyright Frank V. Castellucci:
-//   * Encode path only. `BlobDecoder`, `ExpandedMessageMatrix`, the deprecated
-//     `encode_with_metadata_legacy`, `compute_metadata` and the consistency-check
-//     helpers are omitted.
+//   * Encode and decode paths. `BlobDecoder` is vendored.
+//     `ExpandedMessageMatrix`, the deprecated `encode_with_metadata_legacy`,
+//     `compute_metadata` and the consistency-check helpers remain omitted —
+//     this crate verifies a decode by re-encoding the decoded blob through
+//     `encode_with_metadata` and comparing blob IDs, which is equivalent in
+//     strength to upstream's `Strict` consistency check.
 //   * All `tracing` usage is removed, including the `span: Span` field on
 //     `BlobEncoderData` and its initializer in `BlobEncoder::new`. The
 //     `blob_size` and `blob_prefix` locals fed only that span and are removed
@@ -16,21 +19,20 @@
 //     upstream.
 //   * Upstream is `#![no_std]` and imports from `alloc`; this crate is std,
 //     so those imports are dropped.
-//   * `empty_slivers_range` gains an explicit `+ '_` on its return type.
-//     walrus-core is edition 2024, where `impl Trait` return types capture all
-//     in-scope lifetimes automatically (RFC 3498); this crate is edition 2021,
-//     where they do not, so the verbatim signature fails with E0700. `+ '_` is
-//     precisely what edition 2024 infers.
 //   * Upstream `#[cfg(test)]` code omitted.
 
 //! 2D Reed-Solomon blob encoding, vendored from walrus-core.
 
-use core::{cmp, num::NonZeroU16, ops::Range, slice::Chunks};
+use core::{cmp, marker::PhantomData, num::NonZeroU16, ops::Range, slice::Chunks};
+use std::collections::BTreeSet;
 
 use fastcrypto::hash::Blake2b256;
 
 use super::{
     DataTooLargeError,
+    DecodeError,
+    Decoder,
+    DecodingSymbol,
     EncodingAxis,
     EncodingConfigEnum,
     EncodingFactory as _,
@@ -39,10 +41,11 @@ use super::{
     Secondary,
     SliverData,
     SliverPair,
+    Symbols,
     utils,
 };
 use crate::walrus::vendored::{
-    core::SliverIndex,
+    core::{SliverIndex, ensure},
     merkle::{MerkleTree, Node, leaf_hash},
     metadata::{SliverPairMetadata, VerifiedBlobMetadataWithId},
 };
@@ -137,7 +140,7 @@ impl BlobEncoderData {
     fn empty_slivers_range<E: EncodingAxis>(
         &self,
         range: Range<u16>,
-    ) -> impl Iterator<Item = SliverData<E>> + '_ {
+    ) -> impl Iterator<Item = SliverData<E>> {
         range.map(|i| self.empty_sliver::<E>(SliverIndex(i)))
     }
 
@@ -387,5 +390,191 @@ impl<'a> BlobEncoder<'a> {
     fn rows(&self) -> Chunks<'_, u8> {
         self.blob()
             .chunks(self.inner.n_columns_usize() * self.symbol_usize())
+    }
+}
+
+/// Struct to reconstruct a blob from either [`Primary`] (default) or [`Secondary`]
+/// [`Sliver`s][SliverData].
+#[derive(Debug)]
+pub struct BlobDecoder<D: Decoder, E: EncodingAxis = Primary> {
+    _decoding_axis: PhantomData<E>,
+    decoder: D,
+    blob_size: usize,
+    symbol_size: NonZeroU16,
+    sliver_count: usize,
+    sliver_length: usize,
+    /// The number of columns of the blob's message matrix (i.e., the number of secondary slivers).
+    n_columns: usize,
+    /// The workspace used to store the sliver data and iteratively overwrite it with the decoded
+    /// blob. While a flat byte array, this is interpreted as a matrix of symbols. The layout is the
+    /// same as the blob's message matrix; that is, primary slivers are written as "rows" while
+    /// secondary slivers are written as "columns".
+    workspace: Symbols,
+    /// The indices of the slivers that have been provided and added to the workspace.
+    sliver_indices: Vec<SliverIndex>,
+}
+
+impl<D: Decoder, E: EncodingAxis> BlobDecoder<D, E> {
+    /// Creates a new `BlobDecoder` to decode a blob of size `blob_size` using the provided
+    /// configuration.
+    ///
+    /// The generic parameter specifies from which type of slivers the decoding will be performed.
+    ///
+    /// This function creates the necessary decoders for the decoding; actual decoding can be
+    /// performed with the [`decode()`][Self::decode] method.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`DecodeError::DataTooLarge`] if the `blob_size` is too large to be decoded.
+    /// Returns a [`DecodeError::IncompatibleParameters`] if the parameters are incompatible with
+    /// the decoder.
+    pub fn new(config: &D::Config, blob_size: u64) -> Result<Self, DecodeError> {
+        let symbol_size = config.symbol_size_for_blob(blob_size)?;
+        let blob_size = blob_size.try_into().map_err(|_| DataTooLargeError)?;
+        let n_source_symbols = config.n_source_symbols::<E>();
+
+        let decoder = D::new(n_source_symbols, config.n_shards(), symbol_size)?;
+
+        let sliver_length = config.n_source_symbols::<E::OrthogonalAxis>().get().into();
+        let sliver_count = usize::from(n_source_symbols.get());
+        let n_symbols_in_workspace = sliver_length * sliver_count;
+
+        let (n_columns, workspace) = if E::IS_PRIMARY {
+            (
+                sliver_length,
+                Symbols::with_capacity(n_symbols_in_workspace, symbol_size),
+            )
+        } else {
+            (
+                sliver_count,
+                Symbols::zeros(n_symbols_in_workspace, symbol_size),
+            )
+        };
+
+        Ok(Self {
+            _decoding_axis: PhantomData,
+            decoder,
+            blob_size,
+            symbol_size,
+            sliver_count,
+            sliver_length,
+            n_columns,
+            workspace,
+            sliver_indices: Vec::with_capacity(n_source_symbols.get().into()),
+        })
+    }
+
+    /// Attempts to decode the source blob from the provided slivers.
+    ///
+    /// Returns the source blob as a byte vector if decoding succeeds.
+    ///
+    /// Slivers of incorrect length are dropped.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`DecodeError::DecodingUnsuccessful`] if decoding was unsuccessful.
+    ///
+    /// # Panics
+    ///
+    /// This function can panic if there is insufficient virtual memory for the decoded blob in
+    /// addition to the slivers, notably on 32-bit architectures.
+    pub fn decode<S>(mut self, slivers: S) -> Result<Vec<u8>, DecodeError>
+    where
+        S: IntoIterator<Item = SliverData<E>>,
+        E: EncodingAxis,
+    {
+        self.check_and_write_slivers_to_workspace(slivers)?;
+        self.perform_decoding()?;
+
+        let mut blob = self.workspace.into_vec();
+        blob.truncate(self.blob_size);
+        Ok(blob)
+    }
+
+    fn check_and_write_slivers_to_workspace(
+        &mut self,
+        slivers: impl IntoIterator<Item = SliverData<E>>,
+    ) -> Result<(), DecodeError> {
+        let mut sliver_indices_set = BTreeSet::new();
+        let mut slivers_count = 0;
+        for sliver in slivers {
+            if slivers_count == self.sliver_count {
+                break;
+            }
+
+            if sliver_indices_set.contains(&sliver.index) {
+                continue;
+            }
+
+            let expected_len = self.sliver_length;
+            let expected_symbol_size = self.symbol_size;
+            if sliver.symbols.len() != expected_len
+                || sliver.symbols.symbol_size() != expected_symbol_size
+            {
+                // Drop slivers of incorrect length or incorrect symbol size.
+                continue;
+            }
+
+            if E::IS_PRIMARY {
+                self.write_primary_sliver_to_workspace(sliver.symbols);
+            } else {
+                self.write_secondary_sliver_to_workspace(sliver.symbols, slivers_count);
+            }
+            self.sliver_indices.push(sliver.index);
+            sliver_indices_set.insert(sliver.index);
+            slivers_count += 1;
+        }
+
+        ensure!(
+            slivers_count == self.sliver_count,
+            DecodeError::DecodingUnsuccessful
+        );
+        Ok(())
+    }
+
+    /// Writes the primary sliver as a new row in the workspace.
+    fn write_primary_sliver_to_workspace(&mut self, sliver: Symbols) {
+        self.workspace
+            .extend(sliver.data())
+            .expect("we checked above that the symbol size is correct");
+    }
+
+    /// Writes the secondary sliver as a column in the workspace.
+    fn write_secondary_sliver_to_workspace(&mut self, sliver: Symbols, column: usize) {
+        sliver.to_symbols().enumerate().for_each(|(row, symbol)| {
+            self.workspace[row * self.n_columns + column].copy_from_slice(symbol);
+        });
+    }
+
+    fn perform_decoding(&mut self) -> Result<(), DecodeError> {
+        for decoder_index in 0..self.sliver_length {
+            let symbols = self.sliver_indices.iter().enumerate().map(
+                |(sliver_index_in_workspace, sliver_index)| {
+                    let index = if E::IS_PRIMARY {
+                        sliver_index_in_workspace * self.n_columns + decoder_index
+                    } else {
+                        decoder_index * self.n_columns + sliver_index_in_workspace
+                    };
+                    DecodingSymbol::<E>::new(sliver_index.0, self.workspace[index].to_vec())
+                },
+            );
+            let decoded_data = self.decoder.decode(symbols)?;
+            // Overwrite the decoding symbols in the workspace with the decoded data.
+            if E::IS_PRIMARY {
+                for (row_index, symbol) in decoded_data.chunks(self.symbol_usize()).enumerate() {
+                    self.workspace[self.n_columns * row_index + decoder_index]
+                        .copy_from_slice(symbol);
+                }
+            } else {
+                self.workspace
+                    [self.n_columns * decoder_index..self.n_columns * (decoder_index + 1)]
+                    .copy_from_slice(&decoded_data);
+            }
+        }
+        Ok(())
+    }
+
+    fn symbol_usize(&self) -> usize {
+        self.symbol_size.get().into()
     }
 }

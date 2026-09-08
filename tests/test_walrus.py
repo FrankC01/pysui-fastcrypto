@@ -414,3 +414,675 @@ class TestWalrusBls:
         aggregate = pfc.bls_aggregate(BLS_SIGNATURES)
         keys = [BLS_PUBLIC_KEY_0_UNCOMPRESSED, BLS_PUBLIC_KEYS[1], BLS_PUBLIC_KEYS[2]]
         assert pfc.bls_aggregate_verify(aggregate, keys, BLS_MESSAGE)
+
+
+def _outer_metadata(result: "pfc.RedstuffEncodeResult") -> bytes:
+    """Build the metadata-GET shape from an encode result.
+
+    ``RedstuffEncodeResult.metadata_bcs`` is the INNER ``BlobMetadata`` that a
+    metadata PUT expects. ``redstuff_verify_metadata`` consumes the OUTER
+    ``BlobMetadataWithId`` that a metadata GET returns, which is the same bytes
+    behind the raw 32-byte blob ID. Constructing it that way here is deliberate:
+    it is the asymmetry callers trip over, pinned as executable code rather than
+    prose, and Rust gate E asserts the identical relationship against an
+    upstream-generated vector.
+    """
+    return result.blob_id + result.metadata_bcs
+
+
+def _primaries(result: "pfc.RedstuffEncodeResult") -> list[bytes]:
+    """Every primary sliver from an encode result, in shard order."""
+    return [pair.primary for pair in result.slivers]
+
+
+def _secondaries(result: "pfc.RedstuffEncodeResult") -> list[bytes]:
+    """Every secondary sliver from an encode result, in shard order."""
+    return [pair.secondary for pair in result.slivers]
+
+
+def _corrupt(sliver: bytes) -> bytes:
+    """Flip the first payload byte of a BCS-encoded sliver.
+
+    Byte 0 is the ULEB128 length prefix, so byte 1 is the first symbol byte —
+    changing it keeps the sliver parseable but changes what it decodes to.
+    """
+    return sliver[:1] + bytes([sliver[1] ^ 0xFF]) + sliver[2:]
+
+
+# At n_shards=10 the Byzantine parameter f is 3, so the decode thresholds are
+# n-2f=4 primary slivers and n-f=7 secondary. Both axes are exercised
+# throughout: on the primary axis a sliver's axis-local index and its pair index
+# are the same number by construction, so a bad index conversion is invisible
+# there and shows up only on the secondary axis.
+PRIMARY_THRESHOLD = 4
+SECONDARY_THRESHOLD = 7
+
+
+class TestWalrusDecode:
+    """The optimistic decode path — reconstruction without verification."""
+
+    def test_primary_round_trip(self):
+        """Exactly n-2f primary slivers reconstruct the blob."""
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        slivers = _primaries(encoded)[:PRIMARY_THRESHOLD]
+        assert (
+            pfc.redstuff_decode(slivers, len(UPSTREAM_BLOB), UPSTREAM_N_SHARDS, "primary")
+            == UPSTREAM_BLOB
+        )
+
+    def test_secondary_round_trip(self):
+        """Exactly n-f secondary slivers reconstruct the blob."""
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        slivers = _secondaries(encoded)[:SECONDARY_THRESHOLD]
+        assert (
+            pfc.redstuff_decode(slivers, len(UPSTREAM_BLOB), UPSTREAM_N_SHARDS, "secondary")
+            == UPSTREAM_BLOB
+        )
+
+    def test_returns_immutable_bytes(self):
+        """The decoded blob crosses as ``bytes``, not ``bytearray``."""
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        blob = pfc.redstuff_decode(
+            _primaries(encoded)[:PRIMARY_THRESHOLD],
+            len(UPSTREAM_BLOB),
+            UPSTREAM_N_SHARDS,
+            "primary",
+        )
+        assert isinstance(blob, bytes)
+
+    def test_sliver_order_does_not_matter(self):
+        """Each sliver carries its own index, so list order is irrelevant.
+
+        A caller collecting slivers from a concurrent fan-out gets them in
+        completion order, not shard order. If order mattered, that would be a
+        silent corruption rather than an error.
+        """
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        slivers = _primaries(encoded)[:PRIMARY_THRESHOLD]
+        assert (
+            pfc.redstuff_decode(
+                list(reversed(slivers)), len(UPSTREAM_BLOB), UPSTREAM_N_SHARDS, "primary"
+            )
+            == UPSTREAM_BLOB
+        )
+
+    def test_extra_slivers_are_ignored(self):
+        """Supplying more than the threshold is allowed, not an error."""
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        assert (
+            pfc.redstuff_decode(
+                _primaries(encoded), len(UPSTREAM_BLOB), UPSTREAM_N_SHARDS, "primary"
+            )
+            == UPSTREAM_BLOB
+        )
+
+    def test_primary_below_threshold_raises(self):
+        """One primary sliver short must fail, not return partial bytes."""
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        slivers = _primaries(encoded)[: PRIMARY_THRESHOLD - 1]
+        with pytest.raises(ValueError) as excinfo:
+            pfc.redstuff_decode(slivers, len(UPSTREAM_BLOB), UPSTREAM_N_SHARDS, "primary")
+        assert excinfo.value.args[0] == "decoding_unsuccessful"
+
+    def test_secondary_below_threshold_raises(self):
+        """One secondary sliver short must fail."""
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        slivers = _secondaries(encoded)[: SECONDARY_THRESHOLD - 1]
+        with pytest.raises(ValueError) as excinfo:
+            pfc.redstuff_decode(slivers, len(UPSTREAM_BLOB), UPSTREAM_N_SHARDS, "secondary")
+        assert excinfo.value.args[0] == "decoding_unsuccessful"
+
+    def test_wrong_axis_slivers_rejected(self):
+        """Secondary slivers passed as primary are dropped, then decode fails.
+
+        The two axes have different sliver lengths, so wrong-axis slivers fail
+        the length check and are silently dropped — leaving too few to decode.
+        This surfaces as ``decoding_unsuccessful``, NOT as a parse error, because
+        both axes share one BCS shape and the bytes deserialize fine.
+        """
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        with pytest.raises(ValueError) as excinfo:
+            pfc.redstuff_decode(
+                _secondaries(encoded), len(UPSTREAM_BLOB), UPSTREAM_N_SHARDS, "primary"
+            )
+        assert excinfo.value.args[0] == "decoding_unsuccessful"
+
+    def test_malformed_sliver_bytes_rejected(self):
+        """Bytes that are not a BCS sliver raise ``invalid_sliver_bcs``."""
+        with pytest.raises(ValueError) as excinfo:
+            pfc.redstuff_decode(
+                [b"\xff\xff\xff\xff"], len(UPSTREAM_BLOB), UPSTREAM_N_SHARDS, "primary"
+            )
+        assert excinfo.value.args[0] == "invalid_sliver_bcs"
+
+    @pytest.mark.parametrize("axis", ["", "Primary", "tertiary", "PRIMARY"])
+    def test_invalid_axis_rejected(self, axis: str):
+        """The axis string is exact and lowercase; anything else is an error."""
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        with pytest.raises(ValueError) as excinfo:
+            pfc.redstuff_decode(
+                _primaries(encoded), len(UPSTREAM_BLOB), UPSTREAM_N_SHARDS, axis
+            )
+        assert excinfo.value.args[0] == "invalid_axis"
+
+    @pytest.mark.parametrize("n_shards", [0, 1, 2, 3])
+    def test_below_minimum_shards_rejected(self, n_shards: int):
+        """Decode enforces the same n_shards floor as encode.
+
+        The code differs from encode's error shape deliberately: the decode
+        surface uses the ``(code, message)`` 2-tuple every ``bls_*`` function
+        uses, while ``redstuff_encode`` still raises a 1-tuple. Backlog #10
+        migrates encode.
+        """
+        with pytest.raises(ValueError) as excinfo:
+            pfc.redstuff_decode([b""], len(UPSTREAM_BLOB), n_shards, "primary")
+        assert excinfo.value.args[0] == "invalid_n_shards"
+
+    def test_wrong_blob_size_truncates_silently(self):
+        """A wrong ``blob_size`` corrupts the output without raising.
+
+        This is the documented footgun, pinned so it cannot regress into
+        something worse. ``blob_size`` is not derivable from the slivers, and a
+        value that yields the same symbol size decodes cleanly and then
+        truncates to the wrong length. ``RedstuffVerifiedMetadata.unencoded_length``
+        is the authenticated source; ``redstuff_decode_and_verify`` catches this.
+        """
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        slivers = _primaries(encoded)[:PRIMARY_THRESHOLD]
+        assert pfc.redstuff_decode(slivers, 10, UPSTREAM_N_SHARDS, "primary") == b"walrus blo"
+
+
+class TestWalrusVerifiedMetadata:
+    """Metadata self-verification and the handle it produces."""
+
+    def test_accepts_the_metadata_get_shape(self):
+        """The outer ``...WithId`` verifies and yields a handle."""
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        metadata = pfc.redstuff_verify_metadata(_outer_metadata(encoded), UPSTREAM_N_SHARDS)
+        assert metadata.blob_id == encoded.blob_id
+
+    def test_handle_carries_length_and_committee_size(self):
+        """The handle removes ``blob_size`` and ``n_shards`` from later calls."""
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        metadata = pfc.redstuff_verify_metadata(_outer_metadata(encoded), UPSTREAM_N_SHARDS)
+        assert metadata.unencoded_length == len(UPSTREAM_BLOB)
+        assert metadata.n_shards == UPSTREAM_N_SHARDS
+
+    def test_blob_id_is_raw_bytes(self):
+        """The blob ID crosses as raw bytes, matching the encode surface."""
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        metadata = pfc.redstuff_verify_metadata(_outer_metadata(encoded), UPSTREAM_N_SHARDS)
+        assert isinstance(metadata.blob_id, bytes)
+        assert len(metadata.blob_id) == DIGEST_BYTES
+        assert _b64url_unpadded(metadata.blob_id) == UPSTREAM_BLOB_ID_B64
+
+    def test_rejects_the_metadata_put_shape(self):
+        """Passing ``metadata_bcs`` directly is the expected mistake and must fail.
+
+        ``RedstuffEncodeResult.metadata_bcs`` is the INNER ``BlobMetadata`` sent
+        to a metadata PUT. Read as the outer wrapper its first 32 bytes are
+        consumed as a blob ID, leaving a byte stream that is not valid metadata.
+        """
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        with pytest.raises(ValueError) as excinfo:
+            pfc.redstuff_verify_metadata(encoded.metadata_bcs, UPSTREAM_N_SHARDS)
+        assert excinfo.value.args[0] == "invalid_metadata_bcs"
+
+    def test_rejects_wrong_committee_size(self):
+        """Metadata for 10 shards must not verify against a 4-shard committee."""
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        with pytest.raises(ValueError) as excinfo:
+            pfc.redstuff_verify_metadata(_outer_metadata(encoded), 4)
+        assert excinfo.value.args[0] == "invalid_hash_count"
+
+    def test_rejects_tampered_blob_id(self):
+        """A blob ID that does not match the sliver hashes is rejected."""
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        outer = _outer_metadata(encoded)
+        tampered = bytes([outer[0] ^ 0xFF]) + outer[1:]
+        with pytest.raises(ValueError) as excinfo:
+            pfc.redstuff_verify_metadata(tampered, UPSTREAM_N_SHARDS)
+        assert excinfo.value.args[0] == "blob_id_mismatch"
+
+    def test_rejects_malformed_bytes(self):
+        """Bytes that are not BCS metadata raise ``invalid_metadata_bcs``."""
+        with pytest.raises(ValueError) as excinfo:
+            pfc.redstuff_verify_metadata(b"\xff\xff\xff\xff", UPSTREAM_N_SHARDS)
+        assert excinfo.value.args[0] == "invalid_metadata_bcs"
+
+
+class TestWalrusDecodeAndVerify:
+    """The safe read path — decode plus proof the bytes are the right blob."""
+
+    def test_primary_round_trip(self):
+        """Verified primary decode returns the original blob."""
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        metadata = pfc.redstuff_verify_metadata(_outer_metadata(encoded), UPSTREAM_N_SHARDS)
+        slivers = _primaries(encoded)[:PRIMARY_THRESHOLD]
+        assert pfc.redstuff_decode_and_verify(slivers, metadata, "primary") == UPSTREAM_BLOB
+
+    def test_secondary_round_trip(self):
+        """Verified secondary decode returns the original blob."""
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        metadata = pfc.redstuff_verify_metadata(_outer_metadata(encoded), UPSTREAM_N_SHARDS)
+        slivers = _secondaries(encoded)[:SECONDARY_THRESHOLD]
+        assert pfc.redstuff_decode_and_verify(slivers, metadata, "secondary") == UPSTREAM_BLOB
+
+    def test_corrupted_sliver_is_caught(self):
+        """A single flipped byte must surface as ``blob_id_mismatch``.
+
+        This is the property the bare ``redstuff_decode`` does NOT have: the
+        same input there decodes to different bytes with no error at all.
+        """
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        metadata = pfc.redstuff_verify_metadata(_outer_metadata(encoded), UPSTREAM_N_SHARDS)
+        slivers = _primaries(encoded)[:PRIMARY_THRESHOLD]
+        slivers[0] = _corrupt(slivers[0])
+        with pytest.raises(ValueError) as excinfo:
+            pfc.redstuff_decode_and_verify(slivers, metadata, "primary")
+        assert excinfo.value.args[0] == "blob_id_mismatch"
+
+    def test_bare_decode_does_not_catch_what_verify_catches(self):
+        """The contrast that justifies two exports rather than one.
+
+        The identical corrupted input that raises above returns wrong bytes
+        here, silently. If this test ever starts raising, the optimistic path
+        has grown a check it is documented not to have.
+        """
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        slivers = _primaries(encoded)[:PRIMARY_THRESHOLD]
+        slivers[0] = _corrupt(slivers[0])
+        decoded = pfc.redstuff_decode(
+            slivers, len(UPSTREAM_BLOB), UPSTREAM_N_SHARDS, "primary"
+        )
+        assert decoded != UPSTREAM_BLOB
+
+    def test_below_threshold_raises(self):
+        """Too few slivers fails at the decode stage, before verification."""
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        metadata = pfc.redstuff_verify_metadata(_outer_metadata(encoded), UPSTREAM_N_SHARDS)
+        slivers = _primaries(encoded)[: PRIMARY_THRESHOLD - 1]
+        with pytest.raises(ValueError) as excinfo:
+            pfc.redstuff_decode_and_verify(slivers, metadata, "primary")
+        assert excinfo.value.args[0] == "decoding_unsuccessful"
+
+    def test_invalid_axis_rejected(self):
+        """The axis string is validated before any work is done."""
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        metadata = pfc.redstuff_verify_metadata(_outer_metadata(encoded), UPSTREAM_N_SHARDS)
+        with pytest.raises(ValueError) as excinfo:
+            pfc.redstuff_decode_and_verify(_primaries(encoded), metadata, "tertiary")
+        assert excinfo.value.args[0] == "invalid_axis"
+
+
+class TestWalrusVerifySliver:
+    """Per-sliver authentication against verified metadata."""
+
+    def test_valid_primary_sliver_returns_none(self):
+        """Success is ``None``, not ``True`` — this export raises on failure."""
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        metadata = pfc.redstuff_verify_metadata(_outer_metadata(encoded), UPSTREAM_N_SHARDS)
+        assert pfc.redstuff_verify_sliver(_primaries(encoded)[0], metadata, "primary") is None
+
+    def test_every_primary_sliver_verifies(self):
+        """All n_shards primary slivers authenticate against the metadata."""
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        metadata = pfc.redstuff_verify_metadata(_outer_metadata(encoded), UPSTREAM_N_SHARDS)
+        for sliver in _primaries(encoded):
+            pfc.redstuff_verify_sliver(sliver, metadata, "primary")
+
+    def test_every_secondary_sliver_verifies(self):
+        """All n_shards secondary slivers authenticate against the metadata.
+
+        Load-bearing, and not redundant with the primary case. A sliver's hash
+        is looked up by PAIR index, converted from its axis-local index. On the
+        primary axis that conversion is the identity; on the secondary axis
+        sliver j belongs to pair n_shards-1-j. An implementation that skipped
+        the conversion would pass the primary test and reject every honest
+        secondary sliver from every storage node.
+        """
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        metadata = pfc.redstuff_verify_metadata(_outer_metadata(encoded), UPSTREAM_N_SHARDS)
+        for sliver in _secondaries(encoded):
+            pfc.redstuff_verify_sliver(sliver, metadata, "secondary")
+
+    def test_corrupted_sliver_raises_merkle_root_mismatch(self):
+        """A flipped payload byte is the signal that a node served bad data.
+
+        This is the only code in the set that indicts the serving node; the
+        others mean the caller supplied the wrong sliver, axis, or metadata.
+        """
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        metadata = pfc.redstuff_verify_metadata(_outer_metadata(encoded), UPSTREAM_N_SHARDS)
+        corrupted = _corrupt(_primaries(encoded)[0])
+        with pytest.raises(ValueError) as excinfo:
+            pfc.redstuff_verify_sliver(corrupted, metadata, "primary")
+        assert excinfo.value.args[0] == "merkle_root_mismatch"
+
+    def test_wrong_axis_raises_size_mismatch(self):
+        """A secondary sliver checked as primary fails on length, not hash.
+
+        The two axes hold different symbol counts, so this is caught before any
+        Merkle work — and it reports a client error rather than accusing the
+        node.
+        """
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        metadata = pfc.redstuff_verify_metadata(_outer_metadata(encoded), UPSTREAM_N_SHARDS)
+        with pytest.raises(ValueError) as excinfo:
+            pfc.redstuff_verify_sliver(_secondaries(encoded)[0], metadata, "primary")
+        assert excinfo.value.args[0] == "sliver_size_mismatch"
+
+    def test_malformed_sliver_bytes_rejected(self):
+        """Bytes that are not a BCS sliver raise ``invalid_sliver_bcs``."""
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        metadata = pfc.redstuff_verify_metadata(_outer_metadata(encoded), UPSTREAM_N_SHARDS)
+        with pytest.raises(ValueError) as excinfo:
+            pfc.redstuff_verify_sliver(b"\xff\xff\xff\xff", metadata, "primary")
+        assert excinfo.value.args[0] == "invalid_sliver_bcs"
+
+    def test_invalid_axis_rejected(self):
+        """The axis string is validated before the sliver is parsed."""
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        metadata = pfc.redstuff_verify_metadata(_outer_metadata(encoded), UPSTREAM_N_SHARDS)
+        with pytest.raises(ValueError) as excinfo:
+            pfc.redstuff_verify_sliver(_primaries(encoded)[0], metadata, "tertiary")
+        assert excinfo.value.args[0] == "invalid_axis"
+
+
+def _only_value_error(fn, *args):
+    """Call ``fn(*args)`` and assert nothing but ``ValueError`` escapes.
+
+    This is a panic-safety probe, not a behaviour test. The vendored walrus
+    code is a verbatim mirror of upstream and keeps upstream's ``.expect()``
+    calls, which assume a caller has already validated its inputs -- for
+    example ``check_hash``'s "hash must exist if all size checks have been
+    performed". Those are made unreachable at the FFI boundary rather than
+    removed, because rewriting error handling inside ``src/walrus/vendored/``
+    would break the file-for-file diffability the drift check depends on.
+
+    A Rust panic that does reach one surfaces through PyO3 as
+    ``PanicException``, which is NOT a ``ValueError`` and so is invisible to
+    every ``except ValueError`` a caller writes. This crate has shipped that
+    bug once already: an ``n_shards`` below 4 reached an ``.expect()`` deep in
+    the vendored encoder. Returning without raising is allowed -- some of these
+    inputs are legitimately decodable -- but any other exception type is a
+    failure.
+    """
+    try:
+        fn(*args)
+    except ValueError as exc:
+        assert isinstance(exc.args, tuple) and exc.args, "args must be a non-empty tuple"
+        return exc
+    except BaseException as exc:  # noqa: BLE001 - deliberately broad; that is the point
+        raise AssertionError(
+            f"{type(exc).__name__} escaped the FFI boundary. Only ValueError is "
+            f"part of the documented contract; a Rust panic arrives as "
+            f"PanicException and no caller's `except ValueError` will catch it. "
+            f"Original: {exc!r}"
+        ) from exc
+    return None
+
+
+def _sample_positions(length: int, count: int = 24) -> list[int]:
+    """Evenly spread byte offsets across a buffer, capped for runtime."""
+    if length <= count:
+        return list(range(length))
+    step = length // count
+    return [i * step for i in range(count)]
+
+
+class TestWalrusDecodeAdversarial:
+    """Malformed and hostile input must raise ValueError, never panic.
+
+    Decode is the first surface in this crate that parses bytes it did not
+    produce. Storage nodes are individually untrusted by design, so every one
+    of these inputs is something a malicious or broken node can actually send.
+    """
+
+    def test_truncated_metadata_never_panics(self):
+        """Every prefix of valid metadata must fail cleanly."""
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        outer = _outer_metadata(encoded)
+        for cut in _sample_positions(len(outer)):
+            _only_value_error(pfc.redstuff_verify_metadata, outer[:cut], UPSTREAM_N_SHARDS)
+
+    def test_bitflipped_metadata_never_panics(self):
+        """A single corrupted byte anywhere in the metadata must fail cleanly."""
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        outer = _outer_metadata(encoded)
+        for pos in _sample_positions(len(outer)):
+            mangled = outer[:pos] + bytes([outer[pos] ^ 0xFF]) + outer[pos + 1 :]
+            _only_value_error(pfc.redstuff_verify_metadata, mangled, UPSTREAM_N_SHARDS)
+
+    def test_truncated_sliver_never_panics(self):
+        """Every prefix of a valid sliver must fail cleanly on all three paths."""
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        metadata = pfc.redstuff_verify_metadata(_outer_metadata(encoded), UPSTREAM_N_SHARDS)
+        sliver = _primaries(encoded)[0]
+        for cut in _sample_positions(len(sliver)):
+            stub = sliver[:cut]
+            _only_value_error(
+                pfc.redstuff_decode,
+                [stub],
+                len(UPSTREAM_BLOB),
+                UPSTREAM_N_SHARDS,
+                "primary",
+            )
+            _only_value_error(pfc.redstuff_decode_and_verify, [stub], metadata, "primary")
+            _only_value_error(pfc.redstuff_verify_sliver, stub, metadata, "primary")
+
+    def test_bitflipped_sliver_never_panics(self):
+        """A corrupted byte anywhere in a sliver must fail cleanly, not panic.
+
+        The length prefix and the trailing symbol-size and index fields are the
+        interesting positions: corrupting them drives the deserialiser and the
+        index arithmetic off the paths the ``.expect()`` calls assume.
+        """
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        metadata = pfc.redstuff_verify_metadata(_outer_metadata(encoded), UPSTREAM_N_SHARDS)
+        sliver = _primaries(encoded)[0]
+        for pos in range(len(sliver)):
+            mangled = sliver[:pos] + bytes([sliver[pos] ^ 0xFF]) + sliver[pos + 1 :]
+            _only_value_error(
+                pfc.redstuff_decode,
+                [mangled],
+                len(UPSTREAM_BLOB),
+                UPSTREAM_N_SHARDS,
+                "primary",
+            )
+            _only_value_error(pfc.redstuff_decode_and_verify, [mangled], metadata, "primary")
+            _only_value_error(pfc.redstuff_verify_sliver, mangled, metadata, "primary")
+
+    def test_sliver_with_out_of_range_index_never_panics(self):
+        """A sliver claiming index 65535 must be rejected, not indexed with.
+
+        The last two bytes of the BCS encoding are the sliver's own index, and
+        it is entirely under a hostile node's control. ``check_hash`` looks the
+        hash up by PAIR index -- a different number on the secondary axis -- and
+        then ``.expect()``s that it exists.
+        """
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        metadata = pfc.redstuff_verify_metadata(_outer_metadata(encoded), UPSTREAM_N_SHARDS)
+        for axis, source in (("primary", _primaries), ("secondary", _secondaries)):
+            forged = source(encoded)[0][:-2] + b"\xff\xff"
+            _only_value_error(pfc.redstuff_verify_sliver, forged, metadata, axis)
+            _only_value_error(pfc.redstuff_decode_and_verify, [forged], metadata, axis)
+
+    def test_sliver_with_zero_symbol_size_never_panics(self):
+        """Symbol size is a NonZeroU16; a zeroed field must be rejected.
+
+        A zero here would reach division and modulo operations in the vendored
+        symbol arithmetic.
+        """
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        metadata = pfc.redstuff_verify_metadata(_outer_metadata(encoded), UPSTREAM_N_SHARDS)
+        sliver = _primaries(encoded)[0]
+        forged = sliver[:-4] + b"\x00\x00" + sliver[-2:]
+        _only_value_error(pfc.redstuff_verify_sliver, forged, metadata, "primary")
+        _only_value_error(
+            pfc.redstuff_decode, [forged], len(UPSTREAM_BLOB), UPSTREAM_N_SHARDS, "primary"
+        )
+
+    def test_sliver_claiming_enormous_length_never_panics(self):
+        """A length prefix far exceeding the payload must fail cleanly.
+
+        ULEB128 ``0xFF 0xFF 0xFF 0xFF 0x0F`` is 2^32-1. The deserialiser must
+        reject it against the actual buffer rather than trying to allocate.
+        """
+        forged = b"\xff\xff\xff\xff\x0f" + b"AAAA" + b"\x02\x00" + b"\x00\x00"
+        _only_value_error(
+            pfc.redstuff_decode, [forged], len(UPSTREAM_BLOB), UPSTREAM_N_SHARDS, "primary"
+        )
+
+    @pytest.mark.parametrize(
+        "blob_size", [0, 1, 2**31, 2**32, 2**53, 2**63, 2**64 - 1]
+    )
+    def test_extreme_blob_size_never_panics(self, blob_size: int):
+        """An absurd blob_size must be rejected, not turned into an allocation."""
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        slivers = _primaries(encoded)[:PRIMARY_THRESHOLD]
+        _only_value_error(
+            pfc.redstuff_decode, slivers, blob_size, UPSTREAM_N_SHARDS, "primary"
+        )
+
+    def test_negative_blob_size_is_a_type_error_not_a_panic(self):
+        """A negative blob_size is a u64 conversion failure, not a panic.
+
+        PyO3 raises OverflowError here rather than ValueError, which is the
+        same convention ``bls_confirmation_bytes`` documents for ``epoch``.
+        """
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        slivers = _primaries(encoded)[:PRIMARY_THRESHOLD]
+        with pytest.raises((OverflowError, ValueError)):
+            pfc.redstuff_decode(slivers, -1, UPSTREAM_N_SHARDS, "primary")
+
+    def test_empty_sliver_list_never_panics(self):
+        """No slivers at all must be decoding_unsuccessful, not a panic."""
+        exc = _only_value_error(
+            pfc.redstuff_decode, [], len(UPSTREAM_BLOB), UPSTREAM_N_SHARDS, "primary"
+        )
+        assert exc is not None and exc.args[0] == "decoding_unsuccessful"
+
+    def test_duplicate_slivers_never_panics(self):
+        """The same sliver repeated must not be counted toward the threshold.
+
+        A hostile node set could otherwise satisfy the threshold with one
+        sliver replayed, and the decoder would be fed a rank-deficient system.
+        """
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        one = _primaries(encoded)[0]
+        exc = _only_value_error(
+            pfc.redstuff_decode,
+            [one] * (PRIMARY_THRESHOLD + 2),
+            len(UPSTREAM_BLOB),
+            UPSTREAM_N_SHARDS,
+            "primary",
+        )
+        assert exc is not None and exc.args[0] == "decoding_unsuccessful"
+
+    def test_metadata_from_a_different_blob_never_panics(self):
+        """Verifying a sliver against another blob's metadata must fail cleanly."""
+        mine = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        other = pfc.redstuff_encode(b"an entirely different blob of bytes", UPSTREAM_N_SHARDS)
+        other_md = pfc.redstuff_verify_metadata(_outer_metadata(other), UPSTREAM_N_SHARDS)
+        _only_value_error(pfc.redstuff_verify_sliver, _primaries(mine)[0], other_md, "primary")
+        _only_value_error(
+            pfc.redstuff_decode_and_verify,
+            _primaries(mine)[:PRIMARY_THRESHOLD],
+            other_md,
+            "primary",
+        )
+
+    def test_metadata_verified_for_a_different_committee_never_panics(self):
+        """Slivers encoded at one n_shards, metadata verified at another.
+
+        The handle carries n_shards precisely so these cannot disagree, but the
+        slivers themselves still come from the wire.
+        """
+        small = pfc.redstuff_encode(UPSTREAM_BLOB, 4)
+        big = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        big_md = pfc.redstuff_verify_metadata(_outer_metadata(big), UPSTREAM_N_SHARDS)
+        for sliver in _primaries(small):
+            _only_value_error(pfc.redstuff_verify_sliver, sliver, big_md, "primary")
+
+    def test_garbage_bytes_never_panic(self):
+        """Arbitrary non-BCS input on every entry point."""
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        metadata = pfc.redstuff_verify_metadata(_outer_metadata(encoded), UPSTREAM_N_SHARDS)
+        for payload in (b"", b"\x00", b"\xff" * 64, bytes(range(256))):
+            _only_value_error(pfc.redstuff_verify_metadata, payload, UPSTREAM_N_SHARDS)
+            _only_value_error(
+                pfc.redstuff_decode,
+                [payload],
+                len(UPSTREAM_BLOB),
+                UPSTREAM_N_SHARDS,
+                "primary",
+            )
+            _only_value_error(pfc.redstuff_verify_sliver, payload, metadata, "primary")
+
+    def test_padded_sliver_never_panics(self):
+        """A sliver with trailing bytes must be rejected, not panic the decoder.
+
+        This is valid BCS that violates a struct invariant, which is a category
+        the truncation and corruption cases above cannot produce — those break
+        BCS framing and are caught as ``invalid_sliver_bcs`` by the parser.
+
+        `Symbols` documents "the length of this vector is a multiple of
+        `symbol_size`" and `Symbols::new` asserts it, but the derived
+        `Deserialize` never calls `new`. `BlobDecoder`'s only filter compares
+        `Symbols::len()`, which is FLOOR division, so between 1 and
+        `symbol_size - 1` extra bytes pass every check and then panic inside
+        the vendored decoder — `.expect("we checked above that the symbol size
+        is correct")` on the primary axis, an out-of-range slice on secondary.
+
+        A `PanicException` derives from `BaseException`, so it escapes even
+        `except Exception`. Found by security review 2026-09-05; the gate is in
+        `ffi.rs::decode_slivers` because the vendored tree stays verbatim.
+        """
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        metadata = pfc.redstuff_verify_metadata(_outer_metadata(encoded), UPSTREAM_N_SHARDS)
+
+        def pad(sliver: bytes, extra: int) -> bytes:
+            """Append `extra` bytes to the symbol data, bumping the ULEB prefix.
+
+            Valid only while the length prefix stays one byte, which holds for
+            the small vectors used here.
+            """
+            return bytes([sliver[0] + extra]) + sliver[1:-4] + bytes(extra) + sliver[-4:]
+
+        for axis, source, threshold in (
+            ("primary", _primaries, PRIMARY_THRESHOLD),
+            ("secondary", _secondaries, SECONDARY_THRESHOLD),
+        ):
+            slivers = source(encoded)
+            # symbol_size is 2 for this vector, so 1 is the only pad that lands
+            # strictly inside a symbol. Padding by exactly symbol_size changes
+            # the symbol count and is caught by the existing length filter.
+            forged = [pad(slivers[0], 1)] + slivers[1:threshold]
+
+            exc = _only_value_error(
+                pfc.redstuff_decode, forged, len(UPSTREAM_BLOB), UPSTREAM_N_SHARDS, axis
+            )
+            assert exc is not None, f"{axis}: padded sliver was silently accepted"
+            assert exc.args[0] == "invalid_sliver_bcs"
+
+            exc = _only_value_error(pfc.redstuff_decode_and_verify, forged, metadata, axis)
+            assert exc is not None, f"{axis}: padded sliver was silently accepted"
+            assert exc.args[0] == "invalid_sliver_bcs"
+
+    def test_padded_sliver_still_rejected_by_verify_sliver(self):
+        """The verify path was already safe; pin that it stays safe.
+
+        `SliverData::has_correct_length` compares the exact byte length rather
+        than a floor-divided symbol count, so it rejected the padded sliver
+        before the decode-path gate existed. Different code, different reason —
+        worth its own assertion so a future change to either cannot quietly
+        remove the only remaining check.
+        """
+        encoded = pfc.redstuff_encode(UPSTREAM_BLOB, UPSTREAM_N_SHARDS)
+        metadata = pfc.redstuff_verify_metadata(_outer_metadata(encoded), UPSTREAM_N_SHARDS)
+        sliver = _primaries(encoded)[0]
+        forged = bytes([sliver[0] + 1]) + sliver[1:-4] + b"\x00" + sliver[-4:]
+
+        exc = _only_value_error(pfc.redstuff_verify_sliver, forged, metadata, "primary")
+        assert exc is not None and exc.args[0] == "sliver_size_mismatch"

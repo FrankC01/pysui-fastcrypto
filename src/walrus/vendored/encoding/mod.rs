@@ -3,13 +3,15 @@
 
 //! RedStuff encoding, vendored from `walrus-core/src/encoding/`.
 //!
-//! Encode path only — decode, recovery and quilt support are omitted.
+//! Encode, decode and sliver-verification paths. Sliver recovery and quilt
+//! support are omitted; see each vendored file's header for the per-file list
+//! of omissions and deviations.
 
 mod basic_encoding;
-pub use basic_encoding::ReedSolomonEncoder;
+pub use basic_encoding::{Decoder, ReedSolomonDecoder, ReedSolomonEncoder};
 
 mod blob_encoding;
-pub use blob_encoding::{BlobEncoder, OwnedOrBorrowedBlob};
+pub use blob_encoding::{BlobDecoder, BlobEncoder, OwnedOrBorrowedBlob};
 
 mod common;
 pub use common::{EncodingAxis, Primary, Secondary};
@@ -27,8 +29,11 @@ pub use config::{
 mod errors;
 pub use errors::{
     DataTooLargeError,
+    DecodeError,
     EncodeError,
     InvalidDataSizeError,
+    RecoverySymbolError,
+    SliverVerificationError,
     WrongSymbolSizeError,
 };
 
@@ -39,6 +44,6 @@ mod slivers;
 pub use slivers::{PrimarySliver, SecondarySliver, SliverData, SliverPair};
 
 mod symbols;
-pub use symbols::Symbols;
+pub use symbols::{DecodingSymbol, Symbols};
 
 mod utils;

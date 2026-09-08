@@ -21,8 +21,10 @@ from the walrus-core crate of the Walrus project.
 
 The vendored code is a PARTIAL and MODIFIED subset of walrus-core. Specifically:
 
-  * Only the blob ENCODE path is vendored. All decode, sliver recovery, and
-    reconstruction code is deliberately omitted.
+  * The blob ENCODE and DECODE paths are vendored, together with blob-metadata
+    verification and per-sliver verification. Sliver RECOVERY (rebuilding one
+    sliver from recovery symbols) and inconsistency proofs remain deliberately
+    omitted.
   * Quilt (blob batching) support is not vendored.
   * Upstream unit tests are not vendored.
   * Imports, module paths, error types and trait boundaries have been adapted
@@ -30,7 +32,7 @@ The vendored code is a PARTIAL and MODIFIED subset of walrus-core. Specifically:
 
 An exhaustive record of which upstream items were vendored, with file and line
 references against the pinned commit above, is maintained in
-`.claude/walrus-port-manifest.md`.
+`scratch/vendor-drift/walrus-port-manifest.md`.
 
 Each vendored source file retains the original Walrus Foundation copyright
 notice and carries a provenance comment identifying its upstream origin.
